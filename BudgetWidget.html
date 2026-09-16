@@ -249,39 +249,38 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
     var isExp    = isProdExpense(catName) || (isProch && isRetCli);
 
     // Факт (все транзакции ≤ endDate)
-    if (incAmt > 0 && INC_CAT_NAMES[catName]) addV(revF,  ci, incAmt);
+    if (incAmt > 0 && INC_CAT_NAMES[catName]) addV(revF, ci, incAmt);
     if (expAmt && isExp)                       addV(costF, ci, expAmt);
 
     // Историческая часть плана (прошлые месяцы: факт = план)
     if (isPast) {
-      if (incAmt > 0 && INC_CAT_NAMES[catName]) addV(revP,  ci, incAmt);
+      if (incAmt > 0 && INC_CAT_NAMES[catName]) addV(revP, ci, incAmt);
       if (expAmt && isExp)                       addV(costP, ci, expAmt);
     }
   });
 
-  // ─── 2. PLS: НДС факт + историческая часть плана НДС ────────────────────
+  // ─── 2. PLS: выделенный НДС факт (идентично Budget1 calcVatForecast шаги 4a/4b) ──
+  // cat=3147 (Налог-НДС, income)   → vatRevF/vatRevP  (НДС начисленный на доходы)
+  // cat=3144 (Налоги-НДС, outcome) → vatCostF/vatCostP (НДС к вычету по расходам)
+  // Одинаковая логика для 2025 и 2026 — «по выделенному из транзакций НДС».
   plsItems.forEach(function (p) {
     var dt = p.date || '';
     if (!dt || dt < START_DATE || dt > endDate) return;
-    // Фильтр по счёту — если поле присутствует в PLS-записи
     var acctP = p.org_account_id;
     if (acctP && !VSIP_ACC_IDS[acctP] && !TT_ACC_IDS[acctP]) return;
     if (EXCL_PIDS[p.project_id]) return;
-    var ci     = colIdx(p.project_id);
-    var isPast = (dt < curMonthStart);
+    var ci = colIdx(p.project_id);
+    if (ci < 0) return;
+    var isPastP = (dt < curMonthStart);
 
-    if (p.category_id === 3158) {                   // НДС исходящий (на доходы)
-      var vIn = parseFloat(p.income) || 0;
-      if (ci >= 0) {
-        addV(vatRevF, ci, vIn);
-        if (isPast) addV(vatRevP, ci, vIn);
-      }
-    } else if (p.category_id === 3157) {            // НДС входящий (к вычету)
-      var vOut = parseFloat(p.outcome) || 0;
-      if (ci >= 0) {
-        addV(vatCostF, ci, vOut);
-        if (isPast) addV(vatCostP, ci, vOut);
-      }
+    if (p.category_id === 3147) {                    // НДС начисленный (доходы)
+      var vIn = (parseFloat(p.income) || 0) - (parseFloat(p.outcome) || 0);
+      addV(vatRevF, ci, vIn);
+      if (isPastP) addV(vatRevP, ci, vIn);
+    } else if (p.category_id === 3144) {             // НДС к вычету (расходы)
+      var vOut = (parseFloat(p.outcome) || 0) - (parseFloat(p.income) || 0);
+      addV(vatCostF, ci, vOut);
+      if (isPastP) addV(vatCostP, ci, vOut);
     }
   });
 
