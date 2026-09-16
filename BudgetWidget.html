@@ -79,8 +79,15 @@ var PROJ_COLS = [
 // Накладные расходы (Офис / Админ) — проекты 24 и 26
 var ADMIN_PIDS = { 24: 1, 26: 1 };
 
-// Проекты, полностью исключённые из виджета (не в Прочие и не в Админ)
-var EXCL_PIDS = { 28: 1 };  // Проект СМ
+// Проекты, полностью исключённые из виджета — отсутствуют в PID_MAP виджета Бюджет,
+// поэтому не должны влиять ни на одну строку Budget2.
+var EXCL_PIDS = { 5:1, 8:1, 11:1, 14:1, 15:1, 16:1, 27:1, 28:1, 34:1, 36:1 };
+
+// Белый список счетов — идентично Budget1 (VSIP_ACC_IDS + TT_ACC_IDS).
+// Исключает технические записи org_id=3 (Бюджетный лимит, account 36),
+// которые хранят плановые значения, а не реальное движение денег.
+var VSIP_ACC_IDS = {2:1, 3:1, 4:1, 5:1, 6:1, 7:1, 8:1, 161:1, 166:1};
+var TT_ACC_IDS   = {18:1};
 
 // Совокупность явно именованных project_id (для определения «Прочих»)
 var NAMED_PIDS = {};
@@ -211,6 +218,9 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
   txns.forEach(function (tx) {
     var dt = tx.date || '';
     if (!dt || dt < START_DATE || dt > endDate) return;
+    // Только реальные банковские счета ВСИП и ТТ (идентично Budget1)
+    var acct = tx.org_account_id;
+    if (!VSIP_ACC_IDS[acct] && !TT_ACC_IDS[acct]) return;
     var catName = catMap[tx.category_id] || '';
     if (SKIP_CAT_NAMES[catName]) return;
     if (VAT_CAT_IDS[tx.category_id]) return;
@@ -232,14 +242,20 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
     var ci = colIdx(tx.project_id);
     if (ci < 0) return;
 
+    // «Возвраты клиентам» учитываются в себестоимости Прочих — идентично Budget1,
+    // где isExpense возвращает true для этой категории при proj === 'Прочие'/'Прочие/Закрытые'.
+    var isProch  = (ci === PROJ_COLS.length - 1);
+    var isRetCli = (catName === 'Возвраты клиентам');
+    var isExp    = isProdExpense(catName) || (isProch && isRetCli);
+
     // Факт (все транзакции ≤ endDate)
     if (incAmt > 0 && INC_CAT_NAMES[catName]) addV(revF,  ci, incAmt);
-    if (expAmt > 0 && isProdExpense(catName))  addV(costF, ci, expAmt);
+    if (expAmt > 0 && isExp)                   addV(costF, ci, expAmt);
 
     // Историческая часть плана (прошлые месяцы: факт = план)
     if (isPast) {
       if (incAmt > 0 && INC_CAT_NAMES[catName]) addV(revP,  ci, incAmt);
-      if (expAmt > 0 && isProdExpense(catName))  addV(costP, ci, expAmt);
+      if (expAmt > 0 && isExp)                   addV(costP, ci, expAmt);
     }
   });
 
@@ -247,6 +263,9 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
   plsItems.forEach(function (p) {
     var dt = p.date || '';
     if (!dt || dt < START_DATE || dt > endDate) return;
+    // Фильтр по счёту — если поле присутствует в PLS-записи
+    var acctP = p.org_account_id;
+    if (acctP && !VSIP_ACC_IDS[acctP] && !TT_ACC_IDS[acctP]) return;
     if (EXCL_PIDS[p.project_id]) return;
     var ci     = colIdx(p.project_id);
     var isPast = (dt < curMonthStart);
