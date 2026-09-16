@@ -190,17 +190,78 @@ function addV(arr, ci, v) {
 }
 
 function aggregate(plans, txns, plsItems, catMap, endDate) {
+  // Точка разреза: начало текущего месяца по выбранной дате.
+  // Строка «план» (Бюджет) = факт прошлых месяцев + plan_money текущего и будущих.
+  // Это повторяет логику колонки «Бюджет» в виджете Бюджет.
+  var curMonthStart = endDate.slice(0, 7) + '-01';
+
   var revP     = newArr(), revF     = newArr();
   var costP    = newArr(), costF    = newArr();
   var vatRevP  = newArr(), vatRevF  = newArr();
   var vatCostP = newArr(), vatCostF = newArr();
   var adminP = 0, adminF = 0;
 
-  // ─── Плановые данные (plan_money, org_account_id=36 — Бюджетный лимит) ────
+  // ─── 1. Транзакции (факт + исторический план) ────────────────────────────
+  txns.forEach(function (tx) {
+    var dt = tx.date || '';
+    if (!dt || dt < START_DATE || dt > endDate) return;
+    var catName = catMap[tx.category_id] || '';
+    if (SKIP_CAT_NAMES[catName]) return;
+    if (VAT_CAT_IDS[tx.category_id]) return;
+
+    var incAmt = parseFloat(tx.income)  || 0;
+    var expAmt = parseFloat(tx.outcome) || 0;
+    var isPast = (dt < curMonthStart);  // прошлые месяцы входят в Бюджет
+
+    if (ADMIN_PIDS[tx.project_id]) {
+      if (expAmt > 0) {
+        adminF += expAmt;
+        if (isPast) adminP += expAmt;  // ист. факт → часть плана
+      }
+      return;
+    }
+
+    var ci = colIdx(tx.project_id);
+    if (ci < 0) return;
+
+    // Факт (все транзакции ≤ endDate)
+    if (incAmt > 0 && INC_CAT_NAMES[catName]) addV(revF,  ci, incAmt);
+    if (expAmt > 0 && isProdExpense(catName))  addV(costF, ci, expAmt);
+
+    // Историческая часть плана (прошлые месяцы: факт = план)
+    if (isPast) {
+      if (incAmt > 0 && INC_CAT_NAMES[catName]) addV(revP,  ci, incAmt);
+      if (expAmt > 0 && isProdExpense(catName))  addV(costP, ci, expAmt);
+    }
+  });
+
+  // ─── 2. PLS: НДС факт + историческая часть плана НДС ────────────────────
+  plsItems.forEach(function (p) {
+    var dt = p.date || '';
+    if (!dt || dt < START_DATE || dt > endDate) return;
+    var ci     = colIdx(p.project_id);
+    var isPast = (dt < curMonthStart);
+
+    if (p.category_id === 3158) {                   // НДС исходящий (на доходы)
+      var vIn = parseFloat(p.income) || 0;
+      if (ci >= 0) {
+        addV(vatRevF, ci, vIn);
+        if (isPast) addV(vatRevP, ci, vIn);
+      }
+    } else if (p.category_id === 3157) {            // НДС входящий (к вычету)
+      var vOut = parseFloat(p.outcome) || 0;
+      if (ci >= 0) {
+        addV(vatCostF, ci, vOut);
+        if (isPast) addV(vatCostP, ci, vOut);
+      }
+    }
+  });
+
+  // ─── 3. Plan_money: только текущий месяц и будущие (org_account_id=36) ───
   plans.forEach(function (item) {
     if (item.org_account_id !== 36) return;
     var dt = item.plan_paid_date || '';
-    if (!dt || dt < START_DATE) return;
+    if (!dt || dt < curMonthStart) return;          // только тек. месяц+будущее
     var val     = parseFloat(item.total) || 0;
     var catName = catMap[item.category_id] || '';
     if (SKIP_CAT_NAMES[catName]) return;
@@ -213,52 +274,14 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
     var ci = colIdx(item.project_id);
     if (ci < 0) return;
 
-    if (item.type === 30) {                       // доходы
+    if (item.type === 30) {                         // доходы
       addV(revP, ci, val);
       addV(vatRevP, ci, Math.round(val * 20 / 120));
-    } else if (item.type === 40) {                // расходы
+    } else if (item.type === 40) {                  // расходы
       if (isProdExpense(catName)) {
         addV(costP, ci, val);
         addV(vatCostP, ci, Math.round(val * planExpVatRate(catName)));
       }
-    }
-  });
-
-  // ─── Фактические данные (транзакции org_id=1,2) ───────────────────────────
-  txns.forEach(function (tx) {
-    var dt = tx.date || '';
-    if (!dt || dt < START_DATE || dt > endDate) return;
-    var catName = catMap[tx.category_id] || '';
-    if (SKIP_CAT_NAMES[catName]) return;
-    if (VAT_CAT_IDS[tx.category_id]) return;   // НДС идёт через PLS
-
-    var incAmt = parseFloat(tx.income)  || 0;
-    var expAmt = parseFloat(tx.outcome) || 0;
-
-    if (ADMIN_PIDS[tx.project_id]) {
-      adminF += expAmt;
-      return;
-    }
-
-    var ci = colIdx(tx.project_id);
-    if (ci < 0) return;
-
-    if (incAmt > 0 && INC_CAT_NAMES[catName]) addV(revF,  ci, incAmt);
-    if (expAmt > 0 && isProdExpense(catName))  addV(costF, ci, expAmt);
-  });
-
-  // ─── НДС факт (transaction_pls) ───────────────────────────────────────────
-  plsItems.forEach(function (p) {
-    var dt = p.date || '';
-    if (!dt || dt < START_DATE || dt > endDate) return;
-
-    var ci = colIdx(p.project_id);
-    if (ci < 0) return;
-
-    if (p.category_id === 3158) {                   // НДС исходящий (на доходы)
-      addV(vatRevF, ci, parseFloat(p.income) || 0);
-    } else if (p.category_id === 3157) {            // НДС входящий (к вычету)
-      addV(vatCostF, ci, parseFloat(p.outcome) || 0);
     }
   });
 
@@ -382,7 +405,7 @@ function buildTable(agg) {
     html += '<tr>';
     html += tdL('<span style="' + labelStyle + '">' + label + '</span>', bg1,
                 'border-top:' + (opts.borderTop || '1px solid #f0f0f0'));
-    html += tdL('<span style="font-size:10px;color:#6b7280">план</span>', bg1);
+    html += tdL('<span style="font-size:10px;color:#6b7280">план (бюджет)</span>', bg1);
     pVals.forEach(function (v, i) {
       html += tdV(fmtK(v, i === 0), bg1, i === 0 ? 'font-weight:600' : '');
     });
@@ -465,10 +488,11 @@ function buildTable(agg) {
 
   // Сноски
   html += '<div style="margin-top:8px;font-size:10px;color:#9ca3af;line-height:1.6">';
+  html += '<strong>план (бюджет)</strong> = факт прошлых месяцев + plan_money текущего/будущих — ';
+  html += 'совпадает с колонкой «Бюджет» виджета Бюджет.<br>';
   html += '¹ <em>Наценка за вычетом НДС</em> = Наценка без НДС. ';
   html += 'Остаток на 01.01.2024 будет добавлен после уточнения.<br>';
-  html += '² <em>Админ</em> = расходы проектов «ВСИП Общие расходы» (ID&nbsp;24) ';
-  html += 'и «ТТ общие расходы» (ID&nbsp;26). ';
+  html += '² <em>Админ</em> = расходы проектов 24 (ВСИП Общие) и 26 (ТТ Общие). ';
   html += 'Налог на прибыль не заполнен. Детализация Админ — скрытые строки, будут добавлены позже.';
   html += '</div>';
 
