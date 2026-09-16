@@ -232,7 +232,7 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
     if (EXCL_PIDS[tx.project_id]) return;  // полностью исключённые проекты
 
     if (ADMIN_PIDS[tx.project_id]) {
-      if (expAmt > 0) {
+      if (expAmt) {
         adminF += expAmt;
         if (isPast) adminP += expAmt;  // ист. факт → часть плана
       }
@@ -250,12 +250,12 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
 
     // Факт (все транзакции ≤ endDate)
     if (incAmt > 0 && INC_CAT_NAMES[catName]) addV(revF,  ci, incAmt);
-    if (expAmt > 0 && isExp)                   addV(costF, ci, expAmt);
+    if (expAmt && isExp)                       addV(costF, ci, expAmt);
 
     // Историческая часть плана (прошлые месяцы: факт = план)
     if (isPast) {
       if (incAmt > 0 && INC_CAT_NAMES[catName]) addV(revP,  ci, incAmt);
-      if (expAmt > 0 && isExp)                   addV(costP, ci, expAmt);
+      if (expAmt && isExp)                       addV(costP, ci, expAmt);
     }
   });
 
@@ -308,8 +308,10 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
       addV(revP, ci, val);
       addV(vatRevP, ci, Math.round(val * 20 / 120));
     } else if (item.type === 40) {                  // расходы
+      // Budget1 включает ВСЕ plan_money type=40 в be_plan без фильтра по категории.
+      // isProdExpense применяется только к фактическим транзакциям, не к plan_money.
+      addV(costP, ci, val);
       if (isProdExpense(catName)) {
-        addV(costP, ci, val);
         addV(vatCostP, ci, Math.round(val * planExpVatRate(catName)));
       }
     }
