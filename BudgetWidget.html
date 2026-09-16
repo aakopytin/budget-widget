@@ -79,6 +79,9 @@ var PROJ_COLS = [
 // Накладные расходы (Офис / Админ) — проекты 24 и 26
 var ADMIN_PIDS = { 24: 1, 26: 1 };
 
+// Проекты, полностью исключённые из виджета (не в Прочие и не в Админ)
+var EXCL_PIDS = { 28: 1 };  // Проект СМ
+
 // Совокупность явно именованных project_id (для определения «Прочих»)
 var NAMED_PIDS = {};
 PROJ_COLS.forEach(function (c) {
@@ -216,6 +219,8 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
     var expAmt = parseFloat(tx.outcome) || 0;
     var isPast = (dt < curMonthStart);  // прошлые месяцы входят в Бюджет
 
+    if (EXCL_PIDS[tx.project_id]) return;  // полностью исключённые проекты
+
     if (ADMIN_PIDS[tx.project_id]) {
       if (expAmt > 0) {
         adminF += expAmt;
@@ -242,6 +247,7 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
   plsItems.forEach(function (p) {
     var dt = p.date || '';
     if (!dt || dt < START_DATE || dt > endDate) return;
+    if (EXCL_PIDS[p.project_id]) return;
     var ci     = colIdx(p.project_id);
     var isPast = (dt < curMonthStart);
 
@@ -268,6 +274,8 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
     var val     = parseFloat(item.total) || 0;
     var catName = catMap[item.category_id] || '';
     if (SKIP_CAT_NAMES[catName]) return;
+
+    if (EXCL_PIDS[item.project_id]) return;  // полностью исключённые проекты
 
     if (ADMIN_PIDS[item.project_id]) {
       if (item.type === 40) adminP += val;
