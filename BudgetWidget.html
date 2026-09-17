@@ -765,9 +765,15 @@ function buildTable(agg) {
 
   html += gap();
 
-  var adminBg = { bg: '#fff7ed', bg2: '#fef5ec', bg3: '#fde8c8', totalOnly: true };
+  var adminBg    = { bg: '#fff7ed', bg2: '#fef5ec', bg3: '#fde8c8', totalOnly: true };
+  var adminSubBg = { bg: '#fffdf9', bg2: '#fffbf5', bg3: '#fff4e6', totalOnly: true, color: '#92400e' };
   html += section('Админ²', adminProw, adminFrow,
                   Object.assign({}, adminBg, { borderTop: '2px solid #fed7aa' }));
+  html += section('  ФОТ + Налоги на ФОТ', adminFotProw,  adminFotFrow,  adminSubBg);
+  html += section('  Командировки',          adminTripProw, adminTripFrow, adminSubBg);
+  html += section('  Бухгалтерия',           adminBuhProw,  adminBuhFrow,  adminSubBg);
+  html += section('  Проценты',              adminIntProw,  adminIntFrow,  adminSubBg);
+  html += section('  Прочие',                adminOthProw,  adminOthFrow,  adminSubBg);
 
   html += section('Прибыль',               profitP,  profitF,
                   { italic: true, color: '#15803d',
@@ -792,7 +798,6 @@ function buildTable(agg) {
   html += '² <em>Админ</em> = расходы проектов 24 (ВСИП Общие) и 26 (ТТ Общие); без НДС и Налога на прибыль. Разбивка: ФОТ+Налоги на ФОТ (кат. 9–11), Командировки (7), Бухгалтерия (17), Проценты к уплате (1008), Прочие — остаток.';
   html += '</div>';
 
-  html += buildAdminTable(agg);
   html += buildProchTable(agg.prochByPid);
   return html;
 }
