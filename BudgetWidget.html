@@ -740,6 +740,74 @@ function buildTable(agg) {
            BG_GAP + ';border:none"></td></tr>';
   }
 
+  // Расшифровка Админа по колонкам (аналогично проектам)
+  function adminCols() {
+    var ADMIN_LABELS = ['ФОТ+Налоги\nна ФОТ', 'Командировки', 'Бухгалтерия', 'Проценты', 'Прочие'];
+    var subP = [agg.adminFotP, agg.adminTripP, agg.adminBuhP, agg.adminIntP, agg.adminOthP];
+    var subF = [agg.adminFotF, agg.adminTripF, agg.adminBuhF, agg.adminIntF, agg.adminOthF];
+    var nProj = PROJ_COLS.length;
+    var nSub  = ADMIN_LABELS.length;
+    var bg1 = '#fffdf9', bg2 = '#fffbf5', bg3 = '#fff4e6';
+    var clr = '#92400e';
+    var bot3 = 'border-bottom:2px solid #e5e7eb;';
+    var cs   = 'padding:2px 8px;text-align:right;white-space:nowrap;' + BD;
+
+    function cell(bg, v, extra) {
+      return '<td style="' + cs + 'background:' + bg + ';' + (extra||'') + '">' + (v||'') + '</td>';
+    }
+    function labelCell(bg, v, extra) {
+      return '<td style="padding:2px 8px;white-space:nowrap;' + BD + 'background:' + bg + ';' + (extra||'') + '">' + (v||'') + '</td>';
+    }
+
+    var html = '';
+
+    // Sub-category names row
+    html += '<tr>';
+    html += labelCell(bg1, '');
+    html += labelCell(bg1, '');
+    html += cell(bg1, ''); // Всего — пусто
+    for (var i = 0; i < nProj; i++) {
+      var lbl = i < nSub
+        ? '<span style="font-size:9px;font-weight:600;color:' + clr + '">' + ADMIN_LABELS[i] + '</span>'
+        : '';
+      html += cell(bg1, lbl);
+    }
+    html += '</tr>';
+
+    // Plan row
+    html += '<tr>';
+    html += labelCell(bg1, '');
+    html += labelCell(bg1, '<span style="font-size:10px;color:#6b7280">план (бюджет)</span>');
+    html += cell(bg1, '');
+    for (var i = 0; i < nProj; i++) {
+      html += cell(bg1, i < nSub ? fmtK(subP[i]) : '');
+    }
+    html += '</tr>';
+
+    // Fact row
+    html += '<tr>';
+    html += labelCell(bg2, '');
+    html += labelCell(bg2, '<span style="font-size:10px;color:#6b7280">факт</span>');
+    html += cell(bg2, '');
+    for (var i = 0; i < nProj; i++) {
+      html += cell(bg2, i < nSub ? fmtK(subF[i]) : '');
+    }
+    html += '</tr>';
+
+    // Остаток row
+    html += '<tr>';
+    html += labelCell(bg3, '', bot3);
+    html += labelCell(bg3, '<span style="font-size:10px;color:#6b7280">остаток</span>', bot3);
+    html += cell(bg3, '', bot3);
+    for (var i = 0; i < nProj; i++) {
+      var v = i < nSub ? subP[i] - subF[i] : null;
+      html += cell(bg3, i < nSub ? fmtOst(v) : '', bot3);
+    }
+    html += '</tr>';
+
+    return html;
+  }
+
   // ─── Шапка таблицы ───────────────────────────────────────────────────────
   var html = '<table style="width:100%;border-collapse:collapse;font-size:10.5px">';
   html += '<thead><tr>';
@@ -769,11 +837,7 @@ function buildTable(agg) {
   var adminSubBg = { bg: '#fffdf9', bg2: '#fffbf5', bg3: '#fff4e6', totalOnly: true, color: '#92400e' };
   html += section('Админ²', adminProw, adminFrow,
                   Object.assign({}, adminBg, { borderTop: '2px solid #fed7aa' }));
-  html += section('  ФОТ + Налоги на ФОТ', adminFotProw,  adminFotFrow,  adminSubBg);
-  html += section('  Командировки',          adminTripProw, adminTripFrow, adminSubBg);
-  html += section('  Бухгалтерия',           adminBuhProw,  adminBuhFrow,  adminSubBg);
-  html += section('  Проценты',              adminIntProw,  adminIntFrow,  adminSubBg);
-  html += section('  Прочие',                adminOthProw,  adminOthFrow,  adminSubBg);
+  html += adminCols();
 
   html += section('Прибыль',               profitP,  profitF,
                   { italic: true, color: '#15803d',
