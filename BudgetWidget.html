@@ -155,17 +155,34 @@ function isProdExpense(catName) {
   );
 }
 
-// Ставка НДС на плановый расход по имени категории (выделенный НДС / сумма с НДС)
+// Ставки планового НДС — идентично виджету Бюджет (getPlanExpVatRate / effRates).
+// Нет переключения по дате: ставки фиксированные, как в Budget1.
 function planExpVatRate(catName) {
   if (!catName) return 0;
   var l = catName.toLowerCase();
-  if (l.indexOf('смр') === 0)          return 5 / 105;   // 5%
-  if (l.indexOf('материал') === 0)     return 20 / 120;  // 20%
+  // «...без НДС» в названии → ставка 0 (как в Budget1 getExpCatType)
+  if (l.indexOf('без ндс') >= 0) return 0;
+  // Нулевая ставка: категории без НДС (ZERO_RATE_CATS из Budget1)
+  if (catName === 'Командировки' ||
+      catName === 'Составление исполнительной документации' ||
+      catName === 'Услуги по сертификации' ||
+      catName === 'Тесты и испытания')              return 0;
   if (l.indexOf('проектирован') >= 0 ||
-      l.indexOf('изыскан') >= 0)       return 0;         // 0%
+      l.indexOf('изыскан') >= 0)                    return 0;
   if (l.indexOf('банков') >= 0 &&
-      l.indexOf('гарант') >= 0)        return 0;         // 0%
-  return 20 / 120;                                        // по умолчанию 20%
+      l.indexOf('гарант') >= 0)                     return 0;
+  // proj_other в Budget1 → DEFAULT_EFF_RATE = 0
+  if (l.indexOf('оборудован') >= 0 ||
+      l.indexOf('мобилизац') >= 0)                  return 0;
+  // СМР: 5/105 (жёстко, как в Budget1 effRates['smr'])
+  if (l.indexOf('смр') === 0)                       return 5 / 105;
+  // Материалы, Возвраты клиентам, default: 22/122 (как в Budget1 effRates['mat']/'ret')
+  return 22 / 122;
+}
+
+// Плановая выручка: 22/122 (как в Budget1 шаг 5a)
+function planRevVatRate() {
+  return 22 / 122;
 }
 
 // ── API ───────────────────────────────────────────────────────────────────────
@@ -366,9 +383,10 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
     if (ci < 0) return;
 
     if (item.type === 30) {                         // доходы
+      var rvr = planRevVatRate();
       addV(revP, ci, val);
-      addV(vatRevP, ci, Math.round(val * 20 / 120));
-      if (ci === PROJ_COLS.length - 1) { var ppPM = getProchPP(item.project_id); ppPM.revP += val; ppPM.vatRevP += Math.round(val * 20 / 120); }
+      addV(vatRevP, ci, Math.round(val * rvr));
+      if (ci === PROJ_COLS.length - 1) { var ppPM = getProchPP(item.project_id); ppPM.revP += val; ppPM.vatRevP += Math.round(val * rvr); }
     } else if (item.type === 40) {                  // расходы
       // Budget1 включает ВСЕ plan_money type=40 в be_plan без фильтра по категории.
       // isProdExpense применяется только к фактическим транзакциям, не к plan_money.
