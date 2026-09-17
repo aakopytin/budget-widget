@@ -382,8 +382,8 @@ function buildTable(agg) {
   var adminFrow  = ext1(agg.adminF);
 
   // Прибыль = Наценка за вычетом НДС − Админ
-  var profitP    = vsub(adjMarkP, adminProw);
-  var profitF    = vsub(adjMarkF, adminFrow);
+  var profitP    = vsub(markNetP, adminProw);
+  var profitF    = vsub(markNetF, adminFrow);
 
   // Налог на прибыль — пока не заполнен
   var taxP       = newArr();
@@ -513,10 +513,6 @@ function buildTable(agg) {
   html += section('Наценка без НДС',       markNetP, markNetF,
                   { italic: true, color: '#1e40af' });
 
-  html += section('Наценка за вычетом НДС¹', adjMarkP, adjMarkF,
-                  { italic: true, color: '#92400e',
-                    bg: '#fffbeb', bg2: '#fef9e7', bg3: '#fef3c7',
-                    borderTop: '2px solid #fde68a' });
 
   html += gap();
 
