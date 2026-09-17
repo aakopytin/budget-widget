@@ -83,6 +83,20 @@ var ADMIN_PIDS = { 24: 1, 26: 1 };
 // поэтому не должны влиять ни на одну строку Budget2.
 var EXCL_PIDS = { 5:1, 8:1, 11:1, 14:1, 15:1, 16:1, 27:1, 28:1, 34:1, 36:1 };
 
+// Справочник названий проектов (из st/projects)
+var PROJ_NAME_MAP = {
+  1:'Кемерово', 2:'Рассказово', 3:'Южно-Сахалинск', 4:'Омутнинск',
+  5:'Строитель', 6:'Десногорск', 7:'Иволгинск', 8:'ОКО',
+  9:'Рузаевка', 10:'Большое Болдино', 11:'Новокуйбышевск', 12:'Киров',
+  13:'Барнаул', 14:'Тамбов', 15:'Одинцово', 16:'Покровское',
+  17:'Анадырь', 18:'Уни', 19:'Красногорское', 20:'Чечня',
+  21:'Сити', 22:'Москва (Новгородская)', 23:'Сыктывкар',
+  24:'ВСИП Общие', 25:'Типовой', 26:'ТТ Общие',
+  27:'Трансферы', 28:'Проект СМ', 29:'Первомайское', 30:'Угловское',
+  31:'Тогул', 32:'Менжинского', 33:'Голутвинский', 34:'Толбазы',
+  35:'Прочие/Закрытые', 36:'Корректировки НДС'
+};
+
 // Белый список счетов — идентично Budget1 (VSIP_ACC_IDS + TT_ACC_IDS).
 // Исключает технические записи org_id=3 (Бюджетный лимит, account 36),
 // которые хранят плановые значения, а не реальное движение денег.
@@ -218,11 +232,18 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
   var costP    = newArr(), costF    = newArr();
   var vatRevP  = newArr(), vatRevF  = newArr();
   var vatCostP = newArr(), vatCostF = newArr();
+  var taxP = 0, taxF = 0;
   var adminFotP=0, adminFotF=0;
   var adminTripP=0, adminTripF=0;
   var adminBuhP=0, adminBuhF=0;
   var adminIntP=0, adminIntF=0;
   var adminOthP=0, adminOthF=0;
+  var prochByPid = {};
+  function getProchPP(pid) {
+    var k = (pid || 0) + '';
+    if (!prochByPid[k]) prochByPid[k] = {revP:0,revF:0,costP:0,costF:0,vatRevP:0,vatRevF:0,vatCostP:0,vatCostF:0};
+    return prochByPid[k];
+  }
 
   // ─── 1. Транзакции (факт + исторический план) ────────────────────────────
   txns.forEach(function (tx) {
@@ -240,6 +261,12 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
     var isPast = (dt < curMonthStart);  // прошлые месяцы входят в Бюджет
 
     if (EXCL_PIDS[tx.project_id]) return;  // полностью исключённые проекты
+
+    // Налог на прибыль — отдельная строка, не входит в Админ
+    if (tx.category_id === 1009) {
+      if (expAmt) { taxF += expAmt; if (isPast) taxP += expAmt; }
+      return;
+    }
 
     if (ADMIN_PIDS[tx.project_id]) {
       if (expAmt && !ADMIN_EXCL_IDS[tx.category_id]) {
@@ -271,6 +298,12 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
       if (incAmt > 0 && INC_CAT_NAMES[catName]) addV(revP, ci, incAmt);
       if (expAmt && isExp)                       addV(costP, ci, expAmt);
     }
+    // Детализация «Прочих» по project_id
+    if (isProch) {
+      var ppTx = getProchPP(tx.project_id);
+      if (incAmt > 0 && INC_CAT_NAMES[catName]) { ppTx.revF += incAmt; if (isPast) ppTx.revP += incAmt; }
+      if (expAmt && isExp)                       { ppTx.costF += expAmt; if (isPast) ppTx.costP += expAmt; }
+    }
   });
 
   // ─── 2. PLS: выделенный НДС факт (идентично Budget1 calcVatForecast шаги 4a/4b) ──
@@ -291,10 +324,12 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
       var vIn = (parseFloat(p.income) || 0) - (parseFloat(p.outcome) || 0);
       addV(vatRevF, ci, vIn);
       if (isPastP) addV(vatRevP, ci, vIn);
+      if (ci === PROJ_COLS.length - 1) { var ppPls = getProchPP(p.project_id); ppPls.vatRevF += vIn; if (isPastP) ppPls.vatRevP += vIn; }
     } else if (p.category_id === 3144) {             // НДС к вычету (расходы)
       var vOut = (parseFloat(p.outcome) || 0) - (parseFloat(p.income) || 0);
       addV(vatCostF, ci, vOut);
       if (isPastP) addV(vatCostP, ci, vOut);
+      if (ci === PROJ_COLS.length - 1) { var ppPls = getProchPP(p.project_id); ppPls.vatCostF += vOut; if (isPastP) ppPls.vatCostP += vOut; }
     }
   });
 
@@ -308,6 +343,12 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
     if (SKIP_CAT_NAMES[catName]) return;
 
     if (EXCL_PIDS[item.project_id]) return;  // полностью исключённые проекты
+
+    // Налог на прибыль — план
+    if (item.category_id === 1009) {
+      if (item.type === 40) taxP += val;
+      return;
+    }
 
     if (ADMIN_PIDS[item.project_id]) {
       if (item.type === 40 && !ADMIN_EXCL_IDS[item.category_id]) {
@@ -327,6 +368,7 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
     if (item.type === 30) {                         // доходы
       addV(revP, ci, val);
       addV(vatRevP, ci, Math.round(val * 20 / 120));
+      if (ci === PROJ_COLS.length - 1) { var ppPM = getProchPP(item.project_id); ppPM.revP += val; ppPM.vatRevP += Math.round(val * 20 / 120); }
     } else if (item.type === 40) {                  // расходы
       // Budget1 включает ВСЕ plan_money type=40 в be_plan без фильтра по категории.
       // isProdExpense применяется только к фактическим транзакциям, не к plan_money.
@@ -335,6 +377,11 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
       var isProchPM = (ci === PROJ_COLS.length - 1);
       if (isProdExpense(catName) || (isProchPM && catName === 'Возвраты клиентам')) {
         addV(vatCostP, ci, Math.round(val * planExpVatRate(catName)));
+      }
+      if (isProchPM) {
+        var ppPM = getProchPP(item.project_id);
+        ppPM.costP += val;
+        if (isProdExpense(catName) || catName === 'Возвраты клиентам') ppPM.vatCostP += Math.round(val * planExpVatRate(catName));
       }
     }
   });
@@ -349,9 +396,156 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
     adminBuhP: adminBuhP,   adminBuhF: adminBuhF,
     adminIntP: adminIntP,   adminIntF: adminIntF,
     adminOthP: adminOthP,   adminOthF: adminOthF,
+    taxP: taxP, taxF: taxF,
     adminP: adminFotP+adminTripP+adminBuhP+adminIntP+adminOthP,
-    adminF: adminFotF+adminTripF+adminBuhF+adminIntF+adminOthF
+    adminF: adminFotF+adminTripF+adminBuhF+adminIntF+adminOthF,
+    prochByPid: prochByPid
   };
+}
+
+
+
+// ── РАСШИФРОВКА АДМИН ─────────────────────────────────────────────────────────
+function buildAdminTable(agg) {
+  var cols = [
+    { label: 'ФОТ + Налоги на ФОТ', getP: function(a){return a.adminFotP;},  getF: function(a){return a.adminFotF;}  },
+    { label: 'Командировки',         getP: function(a){return a.adminTripP;}, getF: function(a){return a.adminTripF;} },
+    { label: 'Бухгалтерия',          getP: function(a){return a.adminBuhP;},  getF: function(a){return a.adminBuhF;}  },
+    { label: 'Проценты',             getP: function(a){return a.adminIntP;},  getF: function(a){return a.adminIntF;}  },
+    { label: 'Прочие',               getP: function(a){return a.adminOthP;},  getF: function(a){return a.adminOthF;}  }
+  ];
+
+  var CS2 = 'padding:4px 8px;background:#fff4e6;border-bottom:2px solid #fb923c;' +
+            'font-size:10px;font-weight:600;white-space:nowrap;text-align:right;color:#374151;';
+  var TD  = 'padding:2px 8px;font-size:11px;text-align:right;white-space:nowrap;';
+  var BD2 = 'border-bottom:1px solid #f0f0f0;';
+
+  var totalP = agg.adminP, totalF = agg.adminF, totalO = totalP - totalF;
+
+  var h = '<details style="margin-top:10px">';
+  h += '<summary style="cursor:pointer;font-weight:600;font-size:11px;color:#c2410c;' +
+       'padding:6px 2px;user-select:none;list-style:none">' +
+       '&#9660;&nbsp;Расшифровка «Админ» по категориям</summary>';
+  h += '<div style="overflow-x:auto;margin-top:6px">';
+  h += '<table style="border-collapse:collapse;font-size:11px;width:100%">';
+
+  // Header
+  h += '<thead><tr>';
+  h += '<th style="' + CS2 + 'text-align:left;min-width:80px">Строка</th>';
+  h += '<th style="' + CS2 + ';min-width:80px">Итого</th>';
+  cols.forEach(function(c) { h += '<th style="' + CS2 + ';min-width:100px">' + c.label + '</th>'; });
+  h += '</tr></thead><tbody>';
+
+  var BW = '#fff7ed', BF2 = '#fef5ec', BO2 = '#fde8c8';
+
+  // Plan row
+  h += '<tr>';
+  h += '<td style="' + TD + BD2 + 'background:' + BW + ';color:#6b7280">план</td>';
+  h += '<td style="' + TD + BD2 + 'background:' + BW + ';font-weight:600">' + fmtK(totalP, true) + '</td>';
+  cols.forEach(function(c) { h += '<td style="' + TD + BD2 + 'background:' + BW + '">' + fmtK(c.getP(agg)) + '</td>'; });
+  h += '</tr>';
+  // Fact row
+  h += '<tr>';
+  h += '<td style="' + TD + BD2 + 'background:' + BF2 + ';color:#6b7280">факт</td>';
+  h += '<td style="' + TD + BD2 + 'background:' + BF2 + ';font-weight:600">' + fmtK(totalF, true) + '</td>';
+  cols.forEach(function(c) { h += '<td style="' + TD + BD2 + 'background:' + BF2 + '">' + fmtK(c.getF(agg)) + '</td>'; });
+  h += '</tr>';
+  // Ost row
+  h += '<tr>';
+  h += '<td style="' + TD + 'border-bottom:2px solid #e5e7eb;background:' + BO2 + ';color:#6b7280">остаток</td>';
+  h += '<td style="' + TD + 'border-bottom:2px solid #e5e7eb;background:' + BO2 + ';font-weight:600">' + fmtOst(totalO, true) + '</td>';
+  cols.forEach(function(c) { h += '<td style="' + TD + 'border-bottom:2px solid #e5e7eb;background:' + BO2 + '">' + fmtOst(c.getP(agg)-c.getF(agg)) + '</td>'; });
+  h += '</tr>';
+
+  h += '</tbody></table></div></details>';
+  return h;
+}
+
+// ── РАСШИФРОВКА ПРОЧИХ ────────────────────────────────────────────────────────
+function buildProchTable(prochByPid) {
+  var pids = Object.keys(prochByPid).map(Number).filter(function(pid) {
+    var pp = prochByPid[pid];
+    return pp.revP || pp.revF || pp.costP || pp.costF;
+  }).sort(function(a, b) { return a - b; });
+  if (!pids.length) return '';
+
+  var nExtra = pids.length;
+  var CS2 = 'padding:4px 8px;background:#f0f4f9;border-bottom:2px solid #3d5c7a;' +
+            'font-size:10px;font-weight:600;white-space:nowrap;text-align:right;color:#374151;';
+  var BD2 = 'border-bottom:1px solid #f0f0f0;';
+  var TD  = 'padding:2px 8px;font-size:11px;text-align:right;white-space:nowrap;';
+
+  var h = '<details style="margin-top:18px">';
+  h += '<summary style="cursor:pointer;font-weight:600;font-size:11px;color:#3d5c7a;' +
+       'padding:6px 2px;user-select:none;list-style:none">' +
+       '&#9660;&nbsp;Расшифровка «Прочие» по проектам &mdash; Выручка / Себестоимость / Наценка</summary>';
+  h += '<div style="overflow-x:auto;margin-top:6px">';
+  h += '<table style="border-collapse:collapse;font-size:11px;width:100%">';
+
+  // Header
+  h += '<thead><tr>';
+  h += '<th style="' + CS2 + 'text-align:left;min-width:180px">Показатель</th>';
+  h += '<th style="' + CS2 + ';min-width:50px;color:#6b7280">Строка</th>';
+  h += '<th style="' + CS2 + ';min-width:80px">Итого</th>';
+  pids.forEach(function(pid) {
+    var pname = PROJ_NAME_MAP[pid] || ('Пр. ' + pid);
+    h += '<th style="' + CS2 + ';min-width:80px">' + pname + '</th>';
+  });
+  h += '</tr></thead><tbody>';
+
+  // ── Helper: emit 3 sub-rows (план / факт / остаток) for one section ────────
+  function emitSect(label, italic, color, bg, bgF, bgO, getP, getF) {
+    var totalP = 0, totalF = 0;
+    pids.forEach(function(pid) { totalP += getP(prochByPid[pid]); totalF += getF(prochByPid[pid]); });
+    var totalO = totalP - totalF;
+
+    var lblStyle = 'padding:2px 8px;font-size:11px;white-space:nowrap;' +
+                   (italic ? 'font-style:italic;' : '') +
+                   (color  ? 'color:' + color + ';' : '') + 'font-weight:600;';
+
+    // план
+    h += '<tr>';
+    h += '<td rowspan="3" style="' + lblStyle + 'background:' + bg  + ';border-bottom:2px solid #e5e7eb;">' + label + '</td>';
+    h += '<td style="' + TD + BD2 + 'background:' + bg  + ';color:#6b7280">план</td>';
+    h += '<td style="' + TD + BD2 + 'background:' + bg  + ';font-weight:600">' + fmtK(totalP, true) + '</td>';
+    pids.forEach(function(pid) { h += '<td style="' + TD + BD2 + 'background:' + bg  + '">' + fmtK(getP(prochByPid[pid])) + '</td>'; });
+    h += '</tr>';
+    // факт
+    h += '<tr>';
+    h += '<td style="' + TD + BD2 + 'background:' + bgF + ';color:#6b7280">факт</td>';
+    h += '<td style="' + TD + BD2 + 'background:' + bgF + ';font-weight:600">' + fmtK(totalF, true) + '</td>';
+    pids.forEach(function(pid) { h += '<td style="' + TD + BD2 + 'background:' + bgF + '">' + fmtK(getF(prochByPid[pid])) + '</td>'; });
+    h += '</tr>';
+    // остаток
+    h += '<tr>';
+    h += '<td style="' + TD + 'border-bottom:2px solid #e5e7eb;background:' + bgO + ';color:#6b7280">остаток</td>';
+    h += '<td style="' + TD + 'border-bottom:2px solid #e5e7eb;background:' + bgO + ';font-weight:600">' + fmtOst(totalO, true) + '</td>';
+    pids.forEach(function(pid) { h += '<td style="' + TD + 'border-bottom:2px solid #e5e7eb;background:' + bgO + '">' + fmtOst(getP(prochByPid[pid]) - getF(prochByPid[pid])) + '</td>'; });
+    h += '</tr>';
+  }
+
+  function gap2() {
+    h += '<tr><td colspan="' + (nExtra + 3) + '" style="height:6px;background:#f8f9fd"></td></tr>';
+  }
+
+  // ── с НДС ──
+  var BW = '#ffffff', BF2 = '#fafbff', BO2 = '#f8fdf9';
+  var BM = '#f0f7ff', BMF = '#e8f2ff', BMO = '#dceeff';
+  emitSect('Выручка с НДС',      false, null,      BW,  BF2, BO2, function(pp){return pp.revP;},  function(pp){return pp.revF;});
+  emitSect('Себестоимость с НДС',false, null,      BW,  BF2, BO2, function(pp){return pp.costP;}, function(pp){return pp.costF;});
+  emitSect('Наценка с НДС',      true,  '#1e40af', BM,  BMF, BMO,
+    function(pp){return pp.revP - pp.costP;},
+    function(pp){return pp.revF - pp.costF;});
+  gap2();
+  // ── без НДС ──
+  emitSect('Выручка без НДС',      false, null,      BW,  BF2, BO2, function(pp){return pp.revP  - pp.vatRevP;},  function(pp){return pp.revF  - pp.vatRevF;});
+  emitSect('Себестоимость без НДС',false, null,      BW,  BF2, BO2, function(pp){return pp.costP - pp.vatCostP;}, function(pp){return pp.costF - pp.vatCostF;});
+  emitSect('Наценка без НДС',      true,  '#1e40af', BM,  BMF, BMO,
+    function(pp){return (pp.revP-pp.vatRevP)-(pp.costP-pp.vatCostP);},
+    function(pp){return (pp.revF-pp.vatRevF)-(pp.costF-pp.vatCostF);});
+
+  h += '</tbody></table></div></details>';
+  return h;
 }
 
 // ── ФОРМАТИРОВАНИЕ ────────────────────────────────────────────────────────────
@@ -422,9 +616,9 @@ function buildTable(agg) {
   var profitP    = vsub(markNetP, adminProw);
   var profitF    = vsub(markNetF, adminFrow);
 
-  // Налог на прибыль — пока не заполнен
-  var taxP       = newArr();
-  var taxF       = newArr();
+  // Налог на прибыль — факт + plan_money по кат. 1009
+  var taxP       = ext1(agg.taxP);
+  var taxF       = ext1(agg.taxF);
 
   // Чистая прибыль = Прибыль − Налог
   var netProfP   = vsub(profitP, taxP);
@@ -554,14 +748,8 @@ function buildTable(agg) {
   html += gap();
 
   var adminBg = { bg: '#fff7ed', bg2: '#fef5ec', bg3: '#fde8c8', totalOnly: true };
-  var adminSubBg = { bg: '#fffdf9', bg2: '#fffbf5', bg3: '#fff4e6', totalOnly: true };
   html += section('Админ²', adminProw, adminFrow,
                   Object.assign({}, adminBg, { borderTop: '2px solid #fed7aa' }));
-  html += section('  ФОТ+Налоги на ФОТ', adminFotProw, adminFotFrow,  adminSubBg);
-  html += section('  Командировки',        adminTripProw,adminTripFrow, adminSubBg);
-  html += section('  Бухгалтерия',         adminBuhProw, adminBuhFrow,  adminSubBg);
-  html += section('  Проценты',            adminIntProw, adminIntFrow,  adminSubBg);
-  html += section('  Прочие',              adminOthProw, adminOthFrow,  adminSubBg);
 
   html += section('Прибыль',               profitP,  profitF,
                   { italic: true, color: '#15803d',
@@ -586,6 +774,8 @@ function buildTable(agg) {
   html += '² <em>Админ</em> = расходы проектов 24 (ВСИП Общие) и 26 (ТТ Общие); без НДС и Налога на прибыль. Разбивка: ФОТ+Налоги на ФОТ (кат. 9–11), Командировки (7), Бухгалтерия (17), Проценты к уплате (1008), Прочие — остаток.';
   html += '</div>';
 
+  html += buildAdminTable(agg);
+  html += buildProchTable(agg.prochByPid);
   return html;
 }
 
