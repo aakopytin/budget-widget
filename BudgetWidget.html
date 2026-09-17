@@ -101,7 +101,6 @@ var SKIP_CAT_NAMES = {
   'Перевод между счетами (списание)': 1,
   'Получение кредита': 1, 'Выплата кредита': 1,
   'Получение займа': 1,  'Выплата займа': 1,
-  'Проценты к уплате': 1
 };
 
 // Категории доходов (выручка от основной деятельности)
@@ -115,6 +114,13 @@ var INC_CAT_NAMES = {
 
 // category_id-коды НДС — обрабатываются отдельно через PLS
 var VAT_CAT_IDS = { 3157: 1, 3158: 1, 3144: 1, 3147: 1 };
+
+// Admin sub-category ID sets
+var ADMIN_FOT_IDS  = {9:1, 10:1, 11:1};   // Зарплата + Налоги с зарплаты
+var ADMIN_TRIP_IDS = {7:1};                // Командировки
+var ADMIN_BUH_IDS  = {17:1};              // Бухгалтерия
+var ADMIN_INT_IDS  = {1008:1};            // Проценты к уплате
+var ADMIN_EXCL_IDS = {1009:1};            // Налог на прибыль — исключить из Админ
 
 // Производственные расходы по имени категории
 function isProdExpense(catName) {
@@ -212,7 +218,11 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
   var costP    = newArr(), costF    = newArr();
   var vatRevP  = newArr(), vatRevF  = newArr();
   var vatCostP = newArr(), vatCostF = newArr();
-  var adminP = 0, adminF = 0;
+  var adminFotP=0, adminFotF=0;
+  var adminTripP=0, adminTripF=0;
+  var adminBuhP=0, adminBuhF=0;
+  var adminIntP=0, adminIntF=0;
+  var adminOthP=0, adminOthF=0;
 
   // ─── 1. Транзакции (факт + исторический план) ────────────────────────────
   txns.forEach(function (tx) {
@@ -232,9 +242,13 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
     if (EXCL_PIDS[tx.project_id]) return;  // полностью исключённые проекты
 
     if (ADMIN_PIDS[tx.project_id]) {
-      if (expAmt) {
-        adminF += expAmt;
-        if (isPast) adminP += expAmt;  // ист. факт → часть плана
+      if (expAmt && !ADMIN_EXCL_IDS[tx.category_id]) {
+        var cid4 = tx.category_id;
+        if      (ADMIN_FOT_IDS[cid4])  { adminFotF  += expAmt; if (isPast) adminFotP  += expAmt; }
+        else if (ADMIN_TRIP_IDS[cid4]) { adminTripF += expAmt; if (isPast) adminTripP += expAmt; }
+        else if (ADMIN_BUH_IDS[cid4])  { adminBuhF  += expAmt; if (isPast) adminBuhP  += expAmt; }
+        else if (ADMIN_INT_IDS[cid4])  { adminIntF  += expAmt; if (isPast) adminIntP  += expAmt; }
+        else                           { adminOthF  += expAmt; if (isPast) adminOthP  += expAmt; }
       }
       return;
     }
@@ -296,7 +310,14 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
     if (EXCL_PIDS[item.project_id]) return;  // полностью исключённые проекты
 
     if (ADMIN_PIDS[item.project_id]) {
-      if (item.type === 40) adminP += val;
+      if (item.type === 40 && !ADMIN_EXCL_IDS[item.category_id]) {
+        var cid5 = item.category_id;
+        if      (ADMIN_FOT_IDS[cid5])  adminFotP  += val;
+        else if (ADMIN_TRIP_IDS[cid5]) adminTripP += val;
+        else if (ADMIN_BUH_IDS[cid5])  adminBuhP  += val;
+        else if (ADMIN_INT_IDS[cid5])  adminIntP  += val;
+        else                           adminOthP  += val;
+      }
       return;
     }
 
@@ -323,7 +344,13 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
     costP: costP, costF: costF,
     vatRevP: vatRevP,   vatRevF: vatRevF,
     vatCostP: vatCostP, vatCostF: vatCostF,
-    adminP: adminP, adminF: adminF
+    adminFotP: adminFotP,   adminFotF: adminFotF,
+    adminTripP: adminTripP, adminTripF: adminTripF,
+    adminBuhP: adminBuhP,   adminBuhF: adminBuhF,
+    adminIntP: adminIntP,   adminIntF: adminIntF,
+    adminOthP: adminOthP,   adminOthF: adminOthF,
+    adminP: adminFotP+adminTripP+adminBuhP+adminIntP+adminOthP,
+    adminF: adminFotF+adminTripF+adminBuhF+adminIntF+adminOthF
   };
 }
 
@@ -378,10 +405,20 @@ function buildTable(agg) {
   var markNetF   = vsub(revNetF,    costNetF);
 
   // Админ: только в колонке «Всего»
-  var adminProw  = ext1(agg.adminP);
-  var adminFrow  = ext1(agg.adminF);
+  var adminProw    = ext1(agg.adminP);
+  var adminFrow    = ext1(agg.adminF);
+  var adminFotProw  = ext1(agg.adminFotP);
+  var adminFotFrow  = ext1(agg.adminFotF);
+  var adminTripProw = ext1(agg.adminTripP);
+  var adminTripFrow = ext1(agg.adminTripF);
+  var adminBuhProw  = ext1(agg.adminBuhP);
+  var adminBuhFrow  = ext1(agg.adminBuhF);
+  var adminIntProw  = ext1(agg.adminIntP);
+  var adminIntFrow  = ext1(agg.adminIntF);
+  var adminOthProw  = ext1(agg.adminOthP);
+  var adminOthFrow  = ext1(agg.adminOthF);
 
-  // Прибыль = Наценка за вычетом НДС − Админ
+  // Прибыль = Наценка без НДС − Админ
   var profitP    = vsub(markNetP, adminProw);
   var profitF    = vsub(markNetF, adminFrow);
 
@@ -516,9 +553,15 @@ function buildTable(agg) {
 
   html += gap();
 
-  html += section('Админ²',           adminProw, adminFrow,
-                  { bg: '#fff7ed', bg2: '#fef5ec', bg3: '#fde8c8',
-                    borderTop: '2px solid #fed7aa', totalOnly: true });
+  var adminBg = { bg: '#fff7ed', bg2: '#fef5ec', bg3: '#fde8c8', totalOnly: true };
+  var adminSubBg = { bg: '#fffdf9', bg2: '#fffbf5', bg3: '#fff4e6', totalOnly: true };
+  html += section('Админ²', adminProw, adminFrow,
+                  Object.assign({}, adminBg, { borderTop: '2px solid #fed7aa' }));
+  html += section('  ФОТ+Налоги на ФОТ', adminFotProw, adminFotFrow,  adminSubBg);
+  html += section('  Командировки',        adminTripProw,adminTripFrow, adminSubBg);
+  html += section('  Бухгалтерия',         adminBuhProw, adminBuhFrow,  adminSubBg);
+  html += section('  Проценты',            adminIntProw, adminIntFrow,  adminSubBg);
+  html += section('  Прочие',              adminOthProw, adminOthFrow,  adminSubBg);
 
   html += section('Прибыль',               profitP,  profitF,
                   { italic: true, color: '#15803d',
@@ -540,7 +583,7 @@ function buildTable(agg) {
   html += '<strong>план (бюджет)</strong> = факт прошлых месяцев + plan_money текущего/будущих — ';
   html += 'совпадает с колонкой «Бюджет» виджета Бюджет.<br>';
   html += '² <em>Админ</em> = расходы проектов 24 (ВСИП Общие) и 26 (ТТ Общие). ';
-  html += 'Налог на прибыль не заполнен. Детализация Админ — скрытые строки, будут добавлены позже.';
+  html += '² <em>Админ</em> = расходы проектов 24 (ВСИП Общие) и 26 (ТТ Общие); без НДС и Налога на прибыль. Разбивка: ФОТ+Налоги на ФОТ (кат. 9–11), Командировки (7), Бухгалтерия (17), Проценты к уплате (1008), Прочие — остаток.';
   html += '</div>';
 
   return html;
