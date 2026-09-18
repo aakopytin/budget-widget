@@ -73,7 +73,7 @@ var PROJ_COLS = [
   { name: 'Сахалин',      pids: { 3: 1, 25: 1 } },   // Южно-Сахалинск
   { name: 'Голутвинский', pids: { 33: 1 } },
   { name: 'ЦДА',          pids: { 18:1, 19:1, 29:1, 30:1, 31:1, 32:1 } }, // Центральный договор
-  { name: 'Прочие',       pids: null }                // catch-all
+  { name: 'Прочие/Закрытые', pids: null }            // catch-all
 ];
 
 // Накладные расходы (Офис / Админ) — проекты 24 и 26
@@ -303,8 +303,9 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
     // «Возвраты клиентам» учитываются в себестоимости Прочих — идентично Budget1,
     // где isExpense возвращает true для этой категории при proj === 'Прочие'/'Прочие/Закрытые'.
     var isProch  = (ci === PROJ_COLS.length - 1);
-    var isRetCli = (catName === 'Возвраты клиентам');
-    var isExp    = isProdExpense(catName) || (isProch && isRetCli);
+    // Для Прочих: все расходные транзакции включаются в себестоимость
+    // (аналогично plan_money, где ВСЕ type=40 попадают в costP)
+    var isExp    = isProdExpense(catName) || isProch;
 
     // Факт (все транзакции ≤ endDate)
     if (incAmt > 0 && INC_CAT_NAMES[catName]) addV(revF, ci, incAmt);
@@ -496,7 +497,7 @@ function buildProchTable(prochByPid) {
   var h = '<details style="margin-top:18px">';
   h += '<summary style="cursor:pointer;font-weight:600;font-size:11px;color:#3d5c7a;' +
        'padding:6px 2px;user-select:none;list-style:none">' +
-       '&#9660;&nbsp;Расшифровка «Прочие» по проектам &mdash; Выручка / Себестоимость / Наценка</summary>';
+       '&#9660;&nbsp;Расшифровка «Прочие/Закрытые» по проектам &mdash; Выручка / Себестоимость / Наценка</summary>';
   h += '<div style="overflow-x:auto;margin-top:6px">';
   h += '<table style="border-collapse:collapse;font-size:11px;width:100%">';
 
@@ -741,16 +742,20 @@ function buildTable(agg) {
   }
 
   // Расшифровка Админа по колонкам (аналогично проектам)
+  // Единая строка Админ: Всего + подкатегории как колонки (без отдельной строки итого)
   function adminCols() {
     var ADMIN_LABELS = ['ФОТ+Налоги\nна ФОТ', 'Командировки', 'Бухгалтерия', 'Проценты', 'Прочие'];
     var subP = [agg.adminFotP, agg.adminTripP, agg.adminBuhP, agg.adminIntP, agg.adminOthP];
     var subF = [agg.adminFotF, agg.adminTripF, agg.adminBuhF, agg.adminIntF, agg.adminOthF];
+    var totalP = agg.adminP, totalF = agg.adminF;
     var nProj = PROJ_COLS.length;
     var nSub  = ADMIN_LABELS.length;
-    var bg1 = '#fffdf9', bg2 = '#fffbf5', bg3 = '#fff4e6';
+    var bg1 = '#fff7ed', bg2 = '#fef5ec', bg3 = '#fde8c8';
     var clr = '#92400e';
     var bot3 = 'border-bottom:2px solid #e5e7eb;';
+    var bTop = 'border-top:2px solid #fed7aa;';
     var cs   = 'padding:2px 8px;text-align:right;white-space:nowrap;' + BD;
+    var lbl  = 'font-size:10px;font-weight:600;color:' + clr;
 
     function cell(bg, v, extra) {
       return '<td style="' + cs + 'background:' + bg + ';' + (extra||'') + '">' + (v||'') + '</td>';
@@ -758,47 +763,39 @@ function buildTable(agg) {
     function labelCell(bg, v, extra) {
       return '<td style="padding:2px 8px;white-space:nowrap;' + BD + 'background:' + bg + ';' + (extra||'') + '">' + (v||'') + '</td>';
     }
+    function subLabel(i) {
+      return i < nSub
+        ? '<span style="font-size:9px;font-weight:600;color:' + clr + '">' + ADMIN_LABELS[i] + '</span><br>'
+        : '';
+    }
 
     var html = '';
 
-    // Sub-category names row
+    // Строка «план» — с меткой «Админ²» и итогом в Всего
     html += '<tr>';
-    html += labelCell(bg1, '');
-    html += labelCell(bg1, '');
-    html += cell(bg1, ''); // Всего — пусто
+    html += labelCell(bg1, '<span style="' + lbl + '">Админ²</span>', bTop);
+    html += labelCell(bg1, '<span style="font-size:10px;color:#6b7280">план (бюджет)</span>', bTop);
+    html += cell(bg1, fmtK(totalP, true), bTop + 'font-weight:600');
     for (var i = 0; i < nProj; i++) {
-      var lbl = i < nSub
-        ? '<span style="font-size:9px;font-weight:600;color:' + clr + '">' + ADMIN_LABELS[i] + '</span>'
-        : '';
-      html += cell(bg1, lbl);
+      html += cell(bg1, subLabel(i) + (i < nSub ? fmtK(subP[i]) : ''), bTop);
     }
     html += '</tr>';
 
-    // Plan row
-    html += '<tr>';
-    html += labelCell(bg1, '');
-    html += labelCell(bg1, '<span style="font-size:10px;color:#6b7280">план (бюджет)</span>');
-    html += cell(bg1, '');
-    for (var i = 0; i < nProj; i++) {
-      html += cell(bg1, i < nSub ? fmtK(subP[i]) : '');
-    }
-    html += '</tr>';
-
-    // Fact row
+    // Строка «факт»
     html += '<tr>';
     html += labelCell(bg2, '');
     html += labelCell(bg2, '<span style="font-size:10px;color:#6b7280">факт</span>');
-    html += cell(bg2, '');
+    html += cell(bg2, fmtK(totalF, true), 'font-weight:600');
     for (var i = 0; i < nProj; i++) {
       html += cell(bg2, i < nSub ? fmtK(subF[i]) : '');
     }
     html += '</tr>';
 
-    // Остаток row
+    // Строка «остаток»
     html += '<tr>';
     html += labelCell(bg3, '', bot3);
     html += labelCell(bg3, '<span style="font-size:10px;color:#6b7280">остаток</span>', bot3);
-    html += cell(bg3, '', bot3);
+    html += cell(bg3, fmtOst(totalP - totalF, true), bot3 + 'font-weight:600');
     for (var i = 0; i < nProj; i++) {
       var v = i < nSub ? subP[i] - subF[i] : null;
       html += cell(bg3, i < nSub ? fmtOst(v) : '', bot3);
@@ -833,10 +830,6 @@ function buildTable(agg) {
 
   html += gap();
 
-  var adminBg    = { bg: '#fff7ed', bg2: '#fef5ec', bg3: '#fde8c8', totalOnly: true };
-  var adminSubBg = { bg: '#fffdf9', bg2: '#fffbf5', bg3: '#fff4e6', totalOnly: true, color: '#92400e' };
-  html += section('Админ²', adminProw, adminFrow,
-                  Object.assign({}, adminBg, { borderTop: '2px solid #fed7aa' }));
   html += adminCols();
 
   html += section('Прибыль',               profitP,  profitF,
