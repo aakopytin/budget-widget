@@ -64,16 +64,14 @@ var START_DATE = '2025-01-01';
 // Порядок соответствует виджету Бюджет.
 // null = «Прочие» (catch-all: всё, что не попало в другие колонки и не Админ)
 var PROJ_COLS = [
-  { name: 'Кемерово',     pids: { 1: 1 } },
-  { name: 'Десногорск',   pids: { 6: 1 } },
-  { name: 'Киров',        pids: { 12: 1 } },
-  { name: 'Сыктывкар',   pids: { 23: 1 } },
-  { name: 'Барнаул',      pids: { 13: 1 } },
-  { name: 'Рузаевка',     pids: { 9: 1 } },
-  { name: 'Сахалин',      pids: { 3: 1, 25: 1 } },   // Южно-Сахалинск
-  { name: 'Голутвинский', pids: { 33: 1 } },
-  { name: 'ЦДА',          pids: { 18:1, 19:1, 29:1, 30:1, 31:1, 32:1 } }, // Центральный договор
-  { name: 'Прочие/Закрытые', pids: null }            // catch-all
+  { name: 'Сахалин',         pids: { 3: 1, 25: 1 } },   // Южно-Сахалинск
+  { name: 'Голутвинский',    pids: { 33: 1 } },
+  { name: 'Барнаул',         pids: { 13: 1 } },
+  { name: 'Кемерово',        pids: { 1: 1 } },
+  { name: 'Киров',           pids: { 12: 1 } },
+  { name: 'Сыктывкар',       pids: { 23: 1 } },
+  { name: 'ЦДА',             pids: { 18:1, 19:1, 29:1, 30:1, 31:1, 32:1 } }, // Центральный договор
+  { name: 'Прочие/Закрытые', pids: null }            // catch-all (вкл. Десногорск, Рузаевка)
 ];
 
 // Накладные расходы (Офис / Админ) — проекты 24 и 26
@@ -744,9 +742,10 @@ function buildTable(agg) {
   // Расшифровка Админа по колонкам (аналогично проектам)
   // Единая строка Админ: Всего + подкатегории как колонки (без отдельной строки итого)
   function adminCols() {
-    var ADMIN_LABELS = ['ФОТ+Налоги\nна ФОТ', 'Командировки', 'Бухгалтерия', 'Проценты', 'Прочие'];
-    var subP = [agg.adminFotP, agg.adminTripP, agg.adminBuhP, agg.adminIntP, agg.adminOthP];
-    var subF = [agg.adminFotF, agg.adminTripF, agg.adminBuhF, agg.adminIntF, agg.adminOthF];
+    // Бухгалтерия не отображается отдельно — её суммы включены в «Прочие»
+    var ADMIN_LABELS = ['ФОТ+Налоги\nна ФОТ', 'Командировки', 'Проценты', 'Прочие'];
+    var subP = [agg.adminFotP, agg.adminTripP, agg.adminIntP, agg.adminOthP + agg.adminBuhP];
+    var subF = [agg.adminFotF, agg.adminTripF, agg.adminIntF, agg.adminOthF + agg.adminBuhF];
     var totalP = agg.adminP, totalF = agg.adminF;
     var nProj = PROJ_COLS.length;
     var nSub  = ADMIN_LABELS.length;
