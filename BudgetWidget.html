@@ -673,8 +673,9 @@ function buildTable(agg) {
   var BG_OST = '#f8fdf9';
   var BG_GAP = '#f8f9fd';
 
-  function th(v, align) {
-    return '<th style="' + CS + 'text-align:' + (align || 'right') + '">' + v + '</th>';
+  function th(v, align, width) {
+    var w = width ? 'width:' + width + ';min-width:' + width + ';' : '';
+    return '<th style="' + CS + w + 'text-align:' + (align || 'right') + '">' + v + '</th>';
   }
   function tdV(v, bg, extra) {
     return '<td style="padding:2px 8px;text-align:right;white-space:nowrap;' +
@@ -828,12 +829,21 @@ function buildTable(agg) {
   }
 
   // ─── Шапка таблицы ───────────────────────────────────────────────────────
-  var html = '<table style="width:100%;border-collapse:collapse;font-size:10.5px">';
+  // Ширина колонки проекта = «Голутвинский» (~90px); заголовки переносятся по словам.
+  var PROJ_COL_W = '90px';
+  var CS_PROJ = 'padding:5px 8px;border-bottom:2px solid #3d5c7a;font-size:10px;' +
+                'font-weight:600;white-space:normal;word-break:break-word;' +
+                'background:#f0f4f9;color:#374151;text-align:center;' +
+                'width:' + PROJ_COL_W + ';min-width:' + PROJ_COL_W + ';max-width:' + PROJ_COL_W + ';';
+  function thProj(v) {
+    return '<th style="' + CS_PROJ + '">' + v + '</th>';
+  }
+  var html = '<table style="border-collapse:collapse;font-size:10.5px;table-layout:fixed">';
   html += '<thead><tr>';
-  html += th('Показатель', 'left');
-  html += th('&nbsp;',     'left');
-  html += th('Всего');
-  PROJ_COLS.forEach(function (c) { html += th(c.name); });
+  html += th('Показатель', 'left',  '140px');
+  html += th('&nbsp;',     'left',  '72px');
+  html += th('Всего',      'right', PROJ_COL_W);
+  PROJ_COLS.forEach(function (c) { html += thProj(c.name); });
   html += '</tr></thead><tbody>';
 
   // ─── Строки ──────────────────────────────────────────────────────────────
