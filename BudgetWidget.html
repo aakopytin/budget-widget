@@ -155,6 +155,10 @@ var ADMIN_EXCL_IDS = {1009:1};            // Налог на прибыль — 
 // Производственные расходы по имени категории
 function isProdExpense(catName) {
   if (!catName || SKIP_CAT_NAMES[catName]) return false;
+  // Возвраты клиентам (system_code=RETURNS_TO_CUSTOMERS, cat_id=1006) —
+  // прямой расход проекта: включается в себестоимость факта так же,
+  // как в плане (plan_money type=40 → costP).
+  if (catName === 'Возвраты клиентам') return true;
   var l = catName.toLowerCase();
   return (
     l.indexOf('материал') === 0 ||
