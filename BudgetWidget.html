@@ -278,6 +278,12 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
     return prochByPid[k];
   }
 
+  // Карта plan_money_id → наименование.
+  // Для pid=17 фактические транзакции имеют пустое поле name — реальное название
+  // хранится в связанной записи plan_money. Карта нужна для isBezDogovora().
+  var pmNameMap = {};
+  plans.forEach(function(item) { if (item.name) pmNameMap[item.id] = item.name; });
+
   // ─── 1. Транзакции (факт + исторический план) ────────────────────────────
   txns.forEach(function (tx) {
     var dt = tx.date || '';
@@ -315,8 +321,17 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
 
     var ci = colIdx(tx.project_id);
     if (ci < 0) return;
-    // pid=17: перераспределить по наименованию транзакции
-    if (ci === RSKHB_COL && isBezDogovora(tx.name || tx.description || tx.comment || '')) ci = BEZDOG_COL;
+    // pid=17: перераспределить по наименованию plan_money (tx.name всегда пусто для pid=17)
+    if (ci === RSKHB_COL) {
+      var pmNameTx = pmNameMap[tx.plan_money_id] || tx.name || tx.description || tx.comment || '';
+      if (isBezDogovora(pmNameTx)) ci = BEZDOG_COL;
+    }
+    // Прочие проекты: расходные транзакции с «Лифты»/«Петрозаводск»
+    // в описании или наименовании plan_money → «Проекты без договора»
+    if (ci === PROJ_COLS.length - 1) {
+      var prochNameTx = tx.description || tx.name || tx.comment || pmNameMap[tx.plan_money_id] || '';
+      if (isBezDogovora(prochNameTx)) ci = BEZDOG_COL;
+    }
 
     // «Возвраты клиентам» учитываются в себестоимости Прочих — идентично Budget1,
     // где isExpense возвращает true для этой категории при proj === 'Прочие'/'Прочие/Закрытые'.
@@ -354,7 +369,16 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
     if (EXCL_PIDS[p.project_id]) return;
     var ci = colIdx(p.project_id);
     if (ci < 0) return;
-    if (ci === RSKHB_COL && isBezDogovora(p.name || p.description || '')) ci = BEZDOG_COL;
+    // pid=17: перераспределить по наименованию plan_money
+    if (ci === RSKHB_COL) {
+      var pmNamePls = pmNameMap[p.plan_money_id] || p.name || p.description || '';
+      if (isBezDogovora(pmNamePls)) ci = BEZDOG_COL;
+    }
+    // Прочие проекты: PLS с «Лифты»/«Петрозаводск» → «Проекты без договора»
+    if (ci === PROJ_COLS.length - 1) {
+      var prochNamePls = p.description || p.name || pmNameMap[p.plan_money_id] || '';
+      if (isBezDogovora(prochNamePls)) ci = BEZDOG_COL;
+    }
     var isPastP = (dt < curMonthStart);
 
     if (p.category_id === 3147) {                    // НДС начисленный (доходы)
@@ -830,7 +854,7 @@ function buildTable(agg) {
 
   // ─── Шапка таблицы ───────────────────────────────────────────────────────
   // Ширина колонки проекта = «Голутвинский» (~90px); заголовки переносятся по словам.
-  var PROJ_COL_W = '90px';
+  var PROJ_COL_W = '72px';
   var CS_PROJ = 'padding:5px 8px;border-bottom:2px solid #3d5c7a;font-size:10px;' +
                 'font-weight:600;white-space:normal;word-break:break-word;' +
                 'background:#f0f4f9;color:#374151;text-align:center;' +
