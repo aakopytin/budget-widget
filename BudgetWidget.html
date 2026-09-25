@@ -936,11 +936,12 @@ function setStatus(msg) {
 
 // ── ТАБЛИЦА ДЕНЕЖНОЙ ПОЗИЦИИ ──────────────────────────────────────────────────
 //
-// Показывает денежную позицию компании: от остатка на 01.01.2025 до текущего
+// Показывает денежную позицию компании: от остатка на 01.01.2024 до текущего
 // банковского остатка. Все строки — только факт. Суммы в рублях (fmtK делит /1000).
 //
 // Источники:
-//   opening2025  = balance(bankAccounts) − net_txns_since_2025-01-01
+//   opening2024  = bankBal(все txns до endDate) − net_txns_since_2024-01-01
+//   bankBal      = нетто всех txns на REAL_ACC до endDate (fixed_balance=0 в Aspro)
 //   netProfit    = aggregate() / (revF−vatRevF) − (costF−vatCostF) − adminF − taxF
 //   vneprojNet   = расходы pid=35 без НДС (PLS cat=3157)
 //   finNet       = нетто займы/кредиты (cat: Получение/Выплата кредита/займа)
@@ -981,21 +982,28 @@ function buildCashTable(agg, txns, plsItems, catMap, endDate, bankAccounts) {
   // Совпадает с полным списком счетов из Аспро (fin/bank_account).
   var REAL_ACC = {1:1,2:1,3:1,4:1,5:1,6:1,7:1,8:1,16:1,18:1,26:1,42:1,120:1,161:1,166:1};
 
-  // ── 1. Остаток на 01.01.2025 ─────────────────────────────────────────────
-  // = текущий остаток на счетах (из bank_account.balance) − нетто-движение с 01.01.2025
+  // ── 1. Остаток на 01.01.2024 ─────────────────────────────────────────────
+  // bank_account.balance в Aspro не заполнен (fixed_balance=0 у всех счетов).
+  // Текущий остаток вычисляется как нетто всех транзакций на реальных счетах
+  // с начала истории до endDate. _txns уже содержит все транзакции без фильтра
+  // по дате (api/data.js не добавляет дату в GET-запрос).
   var bankBal = 0;
-  (bankAccounts || []).forEach(function (a) {
-    if (REAL_ACC[+a.id]) bankBal += parseFloat(a.balance) || 0;
-  });
-  var netSince2025 = 0;
   txns.forEach(function (tx) {
-    var dt = tx.date || '';
-    if (!dt || dt < '2025-01-01' || dt > endDate) return;
+    if (!tx.date || tx.date > endDate) return;
     if (REAL_ACC[+tx.org_account_id]) {
-      netSince2025 += (parseFloat(tx.income) || 0) - (parseFloat(tx.outcome) || 0);
+      bankBal += (parseFloat(tx.income) || 0) - (parseFloat(tx.outcome) || 0);
     }
   });
-  var opening2025 = bankBal - netSince2025;
+  // Остаток на 01.01.2024 = текущий остаток − нетто-движение с 01.01.2024 по endDate
+  var netSince2024 = 0;
+  txns.forEach(function (tx) {
+    var dt = tx.date || '';
+    if (!dt || dt < '2024-01-01' || dt > endDate) return;
+    if (REAL_ACC[+tx.org_account_id]) {
+      netSince2024 += (parseFloat(tx.income) || 0) - (parseFloat(tx.outcome) || 0);
+    }
+  });
+  var opening2024 = bankBal - netSince2024;
 
   // ── 2. Чистая прибыль за период (факт, без НДС) ──────────────────────────
   // = (выручка − НДС выручки) − (себестоимость − НДС себестоимости) − Админ − Налоги
@@ -1104,9 +1112,9 @@ function buildCashTable(agg, txns, plsItems, catMap, endDate, bankAccounts) {
   var vatPrevQActual = vatPaidTotal - vatRefund;
 
   // ── Итоговые строки ───────────────────────────────────────────────────────
-  // Формула: Остаток = Остаток_01.01 + ЧП − Внепроектные_безНДС
+  // Формула: Остаток = Остаток_01.01.2024 + ЧП − Внепроектные_безНДС
   //                  + Фин_нетто − НДС_тек − НДС_прош_прогноз
-  var calcBal = opening2025 + netProfit - vneprojNet + finNet - vatCurQ - vatPrevQForecast;
+  var calcBal = opening2024 + netProfit - vneprojNet + finNet - vatCurQ - vatPrevQForecast;
   var diff    = bankBal - calcBal;   // >0 = необъяснённый приход; <0 = необъяснённый расход
 
   // ── HTML ──────────────────────────────────────────────────────────────────
@@ -1148,14 +1156,7 @@ function buildCashTable(agg, txns, plsItems, catMap, endDate, bankAccounts) {
 
   var ri = 0;
 
-  // предупреждение: если банковские счета не загрузились
-  if (!bankAccounts || bankAccounts.length === 0) {
-    h += '<tr><td colspan="3" style="padding:6px 10px;font-size:10px;color:#d97706;background:#fffbeb">' +
-         '&#9888; fin/bank_account не загружен. Добавьте «bank_account» в ALLOWED в api/data.js.' +
-         '</td></tr>';
-  }
-
-  h += row(ri++, 'Остаток на 01.01.2025',                   opening2025, null);
+  h += row(ri++, 'Остаток на 01.01.2024',                   opening2024, null);
   h += row(ri++, 'Чистая прибыль за период (факт)',          netProfit,   null);
   h += row(ri++, 'Внепроектные расходы',
     -vneprojNet,
