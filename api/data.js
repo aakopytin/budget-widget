@@ -5,7 +5,7 @@
 
 const https = require('https');
 
-const GET_ALLOWED = ['plan_money', 'transaction', 'categories', 'transaction_pls'];
+const GET_ALLOWED = ['plan_money', 'transaction', 'categories', 'transaction_pls', 'bank_account'];
 const ALLOWED = ['plan_money', 'transaction', 'categories', 'transaction_pls', 'bank_account'];
 const PAGE_SIZE = 100;
 
@@ -49,7 +49,7 @@ module.exports = async function handler(req, res) {
     return res.end(JSON.stringify({ error: 'ASPRO_API_KEY not set' }));
   }
 
-  // GET handler
+  // ── GET handler — для виджета НДС Прогноз и ДДС (fetchAll/loadAll через GET) ──
   if (req.method === 'GET') {
     const q = req.query || {};
     const entity = q.entity || '';
@@ -69,7 +69,7 @@ module.exports = async function handler(req, res) {
 
     try {
       const data = await httpsGet(url);
-      return res.end(JSON.stringify(data));
+      return res.end(JSON.stringify(data)); // возвращаем сырой ответ Aspro
     } catch (err) {
       res.statusCode = 502;
       return res.end(JSON.stringify({ error: err.message }));
