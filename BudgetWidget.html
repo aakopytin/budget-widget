@@ -282,7 +282,15 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
   // Для pid=17 фактические транзакции имеют пустое поле name — реальное название
   // хранится в связанной записи plan_money. Карта нужна для isBezDogovora().
   var pmNameMap = {};
-  plans.forEach(function(item) { if (item.name) pmNameMap[item.id] = item.name; });
+  // Карта plan_money_id → plan_paid_date.
+  // PLS-записи НДС создаются в Аспро по дате выставления счёта/акта, которая может
+  // не совпадать с датой банковской транзакции. Для корректного isPastP используем
+  // дату plan_money, а не дату самой PLS-записи.
+  var pmDateMap = {};
+  plans.forEach(function(item) {
+    if (item.name) pmNameMap[item.id] = item.name;
+    if (item.plan_paid_date) pmDateMap[item.id] = item.plan_paid_date;
+  });
 
   // ─── 1. Транзакции (факт + исторический план) ────────────────────────────
   txns.forEach(function (tx) {
@@ -379,7 +387,12 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
       var prochNamePls = p.description || p.name || pmNameMap[p.plan_money_id] || '';
       if (isBezDogovora(prochNamePls)) ci = BEZDOG_COL;
     }
-    var isPastP = (dt < curMonthStart);
+    // isPastP: используем дату plan_money (когда признан доход/расход), а не дату PLS.
+    // PLS-записи в Аспро могут быть созданы позже (например, при выставлении акта),
+    // тогда как сам доход уже проведён в прошлом периоде. Без этой коррекции
+    // vatRevF включает «старые» PLS с текущей датой, vatRevP — нет → Plan ≠ Fact без НДС.
+    var plsRefDate = (p.plan_money_id && pmDateMap[p.plan_money_id]) || dt;
+    var isPastP = (plsRefDate < curMonthStart);
 
     if (p.category_id === 3147) {                    // НДС начисленный (доходы)
       var vIn = (parseFloat(p.income) || 0) - (parseFloat(p.outcome) || 0);
