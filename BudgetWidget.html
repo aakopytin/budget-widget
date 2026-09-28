@@ -145,6 +145,9 @@ var INC_CAT_NAMES = {
 // category_id-коды НДС — обрабатываются отдельно через PLS
 var VAT_CAT_IDS = { 3157: 1, 3158: 1, 3144: 1, 3147: 1 };
 
+// Все реальные банковские счета (без технического счёта 36 = Бюджетный лимит)
+var REAL_ACC = {1:1,2:1,3:1,4:1,5:1,6:1,7:1,8:1,16:1,18:1,26:1,42:1,120:1,161:1,166:1};
+
 // Admin sub-category ID sets
 var ADMIN_FOT_IDS  = {9:1, 10:1, 11:1};   // Зарплата + Налоги с зарплаты
 var ADMIN_TRIP_IDS = {7:1};                // Командировки
@@ -657,7 +660,7 @@ function fmtOst(v, bold) {
 
 // ── ТАБЛИЦА ───────────────────────────────────────────────────────────────────
 
-function buildTable(agg) {
+function buildTable(agg, txns, plans, catMap, endDate, plsItems) {
 
   // Вспомогательные операции над массивами длиной NC
   function vsub(a, b) { return a.map(function (v, i) { return v - b[i]; }); }
@@ -704,6 +707,91 @@ function buildTable(agg) {
   // Чистая прибыль = Прибыль − Налог
   var netProfP   = vsub(profitP, taxP);
   var netProfF   = vsub(profitF, taxF);
+
+  var curMonthStart = endDate.slice(0, 7) + '-01';
+
+  // ─── НДС: вычисления для нового раздела ────────────────────────────────
+  // Факт = фактические платежи в бюджет (cat=3144, outcome, реальные счета)
+  var vatFact = 0;
+  txns.forEach(function(tx) {
+    var dt = tx.date || '';
+    if (!dt || dt < START_DATE || dt > endDate) return;
+    if (!VSIP_ACC_IDS[tx.org_account_id] && !TT_ACC_IDS[tx.org_account_id]) return;
+    if (+tx.category_id === 3144) vatFact += parseFloat(tx.outcome) || 0;
+  });
+
+  // A: плановые платежи по статье НДС (plan_money cat=3144, будущие даты)
+  var vatPlanPmt = 0;
+  plans.forEach(function(item) {
+    var dt = item.plan_paid_date || '';
+    if (!dt || dt < curMonthStart) return;
+    if (+item.category_id === 3144) vatPlanPmt += parseFloat(item.total) || 0;
+  });
+
+  // B: расчётный НДС текущего квартала (PLS cat=3147 − 3144, аналогично buildCashTable)
+  var mo_vat = +endDate.slice(5, 7);
+  var cq_vat = Math.ceil(mo_vat / 3);
+  function pad2vat(n) { return n < 10 ? '0' + n : '' + n; }
+  var curQStart_vat = endDate.slice(0, 4) + '-' + pad2vat((cq_vat - 1) * 3 + 1) + '-01';
+  var pmdm_vat = {};
+  plans.forEach(function(item) { if (item.plan_paid_date) pmdm_vat[item.id] = item.plan_paid_date; });
+  function plsRefDt_vat(p) { return (p.plan_money_id && pmdm_vat[p.plan_money_id]) || p.date || ''; }
+  var vRevCQ_vat = 0, vCostCQ_vat = 0;
+  plsItems.forEach(function(p) {
+    var dt = plsRefDt_vat(p);
+    if (!dt || dt < curQStart_vat || dt > endDate) return;
+    if (EXCL_PIDS[+p.project_id]) return;
+    var acc = p.org_account_id;
+    if (acc && !VSIP_ACC_IDS[+acc] && !TT_ACC_IDS[+acc]) return;
+    var cid = +p.category_id;
+    if (cid === 3147) vRevCQ_vat  += (parseFloat(p.income)  || 0) - (parseFloat(p.outcome) || 0);
+    if (cid === 3144) vCostCQ_vat += (parseFloat(p.outcome) || 0) - (parseFloat(p.income)  || 0);
+  });
+  var vatCurQ_vat = vRevCQ_vat - vCostCQ_vat;
+
+  // C: ожидаемый плановый НДС (plan_money-based, из aggregate)
+  // = (плановый НДС итого) − (фактический НДС итого) = разница между vatRevP и vatRevF
+  var vatFutureP = (agg.vatRevP[0] - agg.vatCostP[0]) - (agg.vatRevF[0] - agg.vatCostF[0]);
+
+  // Остаток = A + B + C; План = Факт + Остаток
+  var vatRemainder = vatPlanPmt + vatCurQ_vat + vatFutureP;
+  var vatPlan      = vatFact + vatRemainder;
+  var vatPlanRow   = ext1(vatPlan);
+  var vatFactRow   = ext1(vatFact);
+
+  // ─── Кредиты pid=24: нетто получение/выплата кредитов и займов ─────────
+  // Факт = нетто по транзакциям pid=24
+  var kreditF_ = 0;
+  txns.forEach(function(tx) {
+    if (+tx.project_id !== 24) return;
+    var dt = tx.date || '';
+    if (!dt || dt < START_DATE || dt > endDate) return;
+    var cn = catMap[tx.category_id] || '';
+    if (cn === 'Получение кредита' || cn === 'Получение займа') kreditF_ += parseFloat(tx.income)  || 0;
+    else if (cn === 'Выплата кредита' || cn === 'Выплата займа') kreditF_ -= parseFloat(tx.outcome) || 0;
+  });
+  // План = факт прошлых месяцев + будущие plan_money
+  var kreditPpast_ = 0;
+  txns.forEach(function(tx) {
+    if (+tx.project_id !== 24) return;
+    var dt = tx.date || '';
+    if (!dt || dt < START_DATE || dt >= curMonthStart) return;
+    var cn = catMap[tx.category_id] || '';
+    if (cn === 'Получение кредита' || cn === 'Получение займа') kreditPpast_ += parseFloat(tx.income)  || 0;
+    else if (cn === 'Выплата кредита' || cn === 'Выплата займа') kreditPpast_ -= parseFloat(tx.outcome) || 0;
+  });
+  var kreditPfuture_ = 0;
+  plans.forEach(function(item) {
+    if (+item.project_id !== 24) return;
+    var dt = item.plan_paid_date || '';
+    if (!dt || dt < curMonthStart) return;
+    var cn = catMap[item.category_id] || '';
+    if (cn === 'Получение кредита' || cn === 'Получение займа') kreditPfuture_ += parseFloat(item.total) || 0;
+    else if (cn === 'Выплата кредита' || cn === 'Выплата займа') kreditPfuture_ -= parseFloat(item.total) || 0;
+  });
+  var kreditP_    = kreditPpast_ + kreditPfuture_;
+  var kreditProw_ = ext1(kreditP_);
+  var kreditFrow_ = ext1(kreditF_);
 
   // ─── HTML-хелперы ─────────────────────────────────────────────────────────
   var CS = 'padding:5px 8px;border-bottom:2px solid #3d5c7a;font-size:10px;' +
@@ -895,15 +983,28 @@ function buildTable(agg) {
 
   html += gap();
 
-  html += section('Выручка без НДС',       revNetP,  revNetF);
-  html += section('Себестоимость без НДС', costNetP, costNetF);
-  html += section('Наценка без НДС',       markNetP, markNetF,
-                  { italic: true, color: '#1e40af' });
+  // НДС к уплате (только колонка Всего; Plan = Факт + Остаток)
+  // Факт = фактические платежи cat=3144; Остаток = A (plan_money) + B (тек. кв.) + C (план)
+  html += section('НДС', vatPlanRow, vatFactRow,
+                  { totalOnly: true,
+                    bg: '#faf5ff', bg2: '#f3e8ff', bg3: '#ede9fe',
+                    color: '#7c3aed' });
 
+  html += gap();
+
+  // Наценка без НДС = Наценка с НДС − НДС (начисленный, из aggregate)
+  html += section('Наценка без НДС', markNetP, markNetF,
+                  { italic: true, color: '#1e40af' });
 
   html += gap();
 
   html += adminCols();
+
+  // Кредиты: нетто движение (получение − выплата) по pid=24, только Всего
+  html += section('Кредиты (нетто, pid 24)', kreditProw_, kreditFrow_,
+                  { totalOnly: true,
+                    bg: '#fff7ed', bg2: '#fef5ec', bg3: '#fde8c8',
+                    color: '#92400e' });
 
   html += section('Прибыль',               profitP,  profitF,
                   { italic: true, color: '#15803d',
@@ -983,8 +1084,7 @@ function buildCashTable(agg, txns, plsItems, catMap, endDate, bankAccounts) {
   }
 
   // ── Множество всех реальных счетов (включая депозиты, кассы) ────────────
-  // Совпадает с полным списком счетов из Аспро (fin/bank_account).
-  var REAL_ACC = {1:1,2:1,3:1,4:1,5:1,6:1,7:1,8:1,16:1,18:1,26:1,42:1,120:1,161:1,166:1};
+  // REAL_ACC определена глобально (см. выше, рядом с VAT_CAT_IDS).
 
   // ── 1. Остаток на 01.01.2024 ─────────────────────────────────────────────
   // bank_account.balance в Aspro не заполнен (fixed_balance=0 у всех счетов).
@@ -1208,7 +1308,7 @@ function render() {
   setStatus('&#9679; расчёт...');
   try {
     var agg  = aggregate(_plans, _txns, _pls, _cats, endDate);
-    var html = buildTable(agg);
+    var html = buildTable(agg, _txns, _plans, _cats, endDate, _pls);
     html += buildCashTable(agg, _txns, _pls, _cats, endDate, _bankAccounts);
     document.getElementById('content').innerHTML = html;
     var dt = endDate.split('-').reverse().join('.');
