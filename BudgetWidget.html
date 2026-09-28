@@ -113,10 +113,11 @@ PROJ_COLS.forEach(function (c) {
 });
 
 // Индексы колонок pid=17 — для разделения «Прочие РСХБ» и «Проекты без договора»
-var RSKHB_COL = -1, BEZDOG_COL = -1;
+var RSKHB_COL = -1, BEZDOG_COL = -1, CDA_COL = -1;
 PROJ_COLS.forEach(function (c, i) {
   if (c.name === 'Прочие РСХБ')          RSKHB_COL = i;
   if (c.name === 'Проекты без договора')  BEZDOG_COL = i;
+  if (c.name === 'ЦДА')                   CDA_COL   = i;
 });
 
 // «Без договора»: pid=17 с наименованием, содержащим «Петрозавод» или «лифт»
@@ -284,6 +285,12 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
     if (!prochByPid[k]) prochByPid[k] = {revP:0,revF:0,costP:0,costF:0,vatRevP:0,vatRevF:0,vatCostP:0,vatCostF:0};
     return prochByPid[k];
   }
+  var cdaByPid = {};
+  function getCdaPP(pid) {
+    var k = (pid || 0) + '';
+    if (!cdaByPid[k]) cdaByPid[k] = {revP:0,revF:0,costP:0,costF:0,vatRevP:0,vatRevF:0,vatCostP:0,vatCostF:0};
+    return cdaByPid[k];
+  }
 
   // Карта plan_money_id → наименование.
   // Для pid=17 фактические транзакции имеют пустое поле name — реальное название
@@ -371,6 +378,12 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
       if (incAmt > 0 && INC_CAT_NAMES[catName]) { ppTx.revF += incAmt; if (isPast) ppTx.revP += incAmt; }
       if (expAmt && isExp)                       { ppTx.costF += expAmt; if (isPast) ppTx.costP += expAmt; }
     }
+    // Детализация «ЦДА» по project_id
+    if (ci === CDA_COL) {
+      var ppCda = getCdaPP(tx.project_id);
+      if (incAmt > 0 && INC_CAT_NAMES[catName]) { ppCda.revF += incAmt; if (isPast) ppCda.revP += incAmt; }
+      if (expAmt && isExp)                       { ppCda.costF += expAmt; if (isPast) ppCda.costP += expAmt; }
+    }
   });
 
   // ─── 2. PLS: выделенный НДС факт (идентично Budget1 calcVatForecast шаги 4a/4b) ──
@@ -407,11 +420,13 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
       addV(vatRevF, ci, vIn);
       if (isPastP) addV(vatRevP, ci, vIn);
       if (ci === PROJ_COLS.length - 1) { var ppPls = getProchPP(p.project_id); ppPls.vatRevF += vIn; if (isPastP) ppPls.vatRevP += vIn; }
+      if (ci === CDA_COL)              { var ppCdaV = getCdaPP(p.project_id);  ppCdaV.vatRevF += vIn; if (isPastP) ppCdaV.vatRevP += vIn; }
     } else if (p.category_id === 3144) {             // НДС к вычету (расходы)
       var vOut = (parseFloat(p.outcome) || 0) - (parseFloat(p.income) || 0);
       addV(vatCostF, ci, vOut);
       if (isPastP) addV(vatCostP, ci, vOut);
       if (ci === PROJ_COLS.length - 1) { var ppPls = getProchPP(p.project_id); ppPls.vatCostF += vOut; if (isPastP) ppPls.vatCostP += vOut; }
+      if (ci === CDA_COL)              { var ppCdaV = getCdaPP(p.project_id);  ppCdaV.vatCostF += vOut; if (isPastP) ppCdaV.vatCostP += vOut; }
     }
   });
 
@@ -454,12 +469,14 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
       addV(revP, ci, val);
       addV(vatRevP, ci, Math.round(val * rvr));
       if (ci === PROJ_COLS.length - 1) { var ppPM = getProchPP(item.project_id); ppPM.revP += val; ppPM.vatRevP += Math.round(val * rvr); }
+      if (ci === CDA_COL)              { var ppCdaPM = getCdaPP(item.project_id); ppCdaPM.revP += val; ppCdaPM.vatRevP += Math.round(val * rvr); }
     } else if (item.type === 40) {                  // расходы
       // Budget1 включает ВСЕ plan_money type=40 в be_plan без фильтра по категории.
       // isProdExpense применяется только к фактическим транзакциям, не к plan_money.
       addV(costP, ci, val);
       // НДС на plan_money: производственные категории + «Возвраты клиентам» в Прочих
       var isProchPM = (ci === PROJ_COLS.length - 1);
+      var isCdaPM   = (ci === CDA_COL);
       if (isProdExpense(catName) || (isProchPM && catName === 'Возвраты клиентам')) {
         addV(vatCostP, ci, Math.round(val * planExpVatRate(catName)));
       }
@@ -467,6 +484,11 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
         var ppPM = getProchPP(item.project_id);
         ppPM.costP += val;
         if (isProdExpense(catName) || catName === 'Возвраты клиентам') ppPM.vatCostP += Math.round(val * planExpVatRate(catName));
+      }
+      if (isCdaPM) {
+        var ppCdaPM = getCdaPP(item.project_id);
+        ppCdaPM.costP += val;
+        if (isProdExpense(catName)) ppCdaPM.vatCostP += Math.round(val * planExpVatRate(catName));
       }
     }
   });
@@ -484,7 +506,8 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
     taxP: taxP, taxF: taxF,
     adminP: adminFotP+adminTripP+adminBuhP+adminIntP+adminOthP,
     adminF: adminFotF+adminTripF+adminBuhF+adminIntF+adminOthF,
-    prochByPid: prochByPid
+    prochByPid: prochByPid,
+    cdaByPid: cdaByPid
   };
 }
 
@@ -541,6 +564,86 @@ function buildAdminTable(agg) {
   h += '<td style="' + TD + 'border-bottom:2px solid #e5e7eb;background:' + BO2 + ';font-weight:600">' + fmtOst(totalO, true) + '</td>';
   cols.forEach(function(c) { h += '<td style="' + TD + 'border-bottom:2px solid #e5e7eb;background:' + BO2 + '">' + fmtOst(c.getP(agg)-c.getF(agg)) + '</td>'; });
   h += '</tr>';
+
+  h += '</tbody></table></div></details>';
+  return h;
+}
+
+// ── РАСШИФРОВКА ЦДА ──────────────────────────────────────────────────────────
+function buildCdaTable(cdaByPid) {
+  var cdaPids = PROJ_COLS.filter(function(c) { return c.name === 'ЦДА'; })
+    .reduce(function(arr, c) { return arr.concat(Object.keys(c.pids).map(Number)); }, []);
+
+  // Показываем только проекты с ненулевыми данными, в фиксированном порядке ЦДА
+  var pids = cdaPids.filter(function(pid) {
+    var pp = cdaByPid[pid] || {};
+    return pp.revP || pp.revF || pp.costP || pp.costF;
+  });
+  if (!pids.length) return '';
+
+  var nExtra = pids.length;
+  var CS2 = 'padding:4px 8px;background:#f0f4f9;border-bottom:2px solid #3d5c7a;' +
+            'font-size:10px;font-weight:600;white-space:nowrap;text-align:right;color:#374151;';
+  var BD2 = 'border-bottom:1px solid #f0f0f0;';
+  var TD  = 'padding:2px 8px;font-size:11px;text-align:right;white-space:nowrap;';
+
+  var h = '<details style="margin-top:18px">';
+  h += '<summary style="cursor:pointer;font-weight:600;font-size:11px;color:#3d5c7a;' +
+       'padding:6px 2px;user-select:none;list-style:none">' +
+       '&#9660;&nbsp;Расшифровка «ЦДА» по проектам &mdash; Выручка / Себестоимость / Наценка</summary>';
+  h += '<div style="overflow-x:auto;margin-top:6px">';
+  h += '<table style="border-collapse:collapse;font-size:11px;width:100%">';
+
+  // Заголовок
+  h += '<thead><tr>';
+  h += '<th style="' + CS2 + 'text-align:left;min-width:180px">Показатель</th>';
+  h += '<th style="' + CS2 + ';min-width:50px;color:#6b7280">Строка</th>';
+  h += '<th style="' + CS2 + ';min-width:80px">Итого</th>';
+  pids.forEach(function(pid) {
+    var pname = PROJ_NAME_MAP[pid] || ('Пр. ' + pid);
+    h += '<th style="' + CS2 + ';min-width:80px">' + pname + '</th>';
+  });
+  h += '</tr></thead><tbody>';
+
+  function emitSect(label, italic, color, bg, bgF, bgO, getP, getF) {
+    var totalP = 0, totalF = 0;
+    pids.forEach(function(pid) {
+      var pp = cdaByPid[pid] || {};
+      totalP += getP(pp); totalF += getF(pp);
+    });
+    var totalO = totalP - totalF;
+    var lblStyle = 'padding:2px 8px;font-size:11px;white-space:nowrap;' +
+                   (italic ? 'font-style:italic;' : '') +
+                   (color  ? 'color:' + color + ';' : '') + 'font-weight:600;';
+    h += '<tr>';
+    h += '<td rowspan="3" style="' + lblStyle + 'background:' + bg + ';border-bottom:2px solid #e5e7eb;">' + label + '</td>';
+    h += '<td style="' + TD + BD2 + 'background:' + bg  + ';color:#6b7280">план</td>';
+    h += '<td style="' + TD + BD2 + 'background:' + bg  + ';font-weight:600">' + fmtK(totalP, true) + '</td>';
+    pids.forEach(function(pid) { var pp = cdaByPid[pid]||{}; h += '<td style="' + TD + BD2 + 'background:' + bg  + '">' + fmtK(getP(pp)) + '</td>'; });
+    h += '</tr><tr>';
+    h += '<td style="' + TD + BD2 + 'background:' + bgF + ';color:#6b7280">факт</td>';
+    h += '<td style="' + TD + BD2 + 'background:' + bgF + ';font-weight:600">' + fmtK(totalF, true) + '</td>';
+    pids.forEach(function(pid) { var pp = cdaByPid[pid]||{}; h += '<td style="' + TD + BD2 + 'background:' + bgF + '">' + fmtK(getF(pp)) + '</td>'; });
+    h += '</tr><tr>';
+    h += '<td style="' + TD + 'border-bottom:2px solid #e5e7eb;background:' + bgO + ';color:#6b7280">остаток</td>';
+    h += '<td style="' + TD + 'border-bottom:2px solid #e5e7eb;background:' + bgO + ';font-weight:600">' + fmtOst(totalO, true) + '</td>';
+    pids.forEach(function(pid) { var pp = cdaByPid[pid]||{}; h += '<td style="' + TD + 'border-bottom:2px solid #e5e7eb;background:' + bgO + '">' + fmtOst(getP(pp) - getF(pp)) + '</td>'; });
+    h += '</tr>';
+  }
+
+  function gap2() {
+    h += '<tr><td colspan="' + (nExtra + 3) + '" style="height:6px;background:#f8f9fd"></td></tr>';
+  }
+
+  var BW = '#ffffff', BF2 = '#fafbff', BO2 = '#f8fdf9';
+  var BM = '#f0f7ff', BMF = '#e8f2ff', BMO = '#dceeff';
+  emitSect('Выручка с НДС',      false, null,      BW,  BF2, BO2, function(pp){return pp.revP  || 0;}, function(pp){return pp.revF  || 0;});
+  gap2();
+  emitSect('Себестоимость с НДС',false, null,      BW,  BF2, BO2, function(pp){return pp.costP || 0;}, function(pp){return pp.costF || 0;});
+  gap2();
+  emitSect('Наценка с НДС',      true,  '#1e40af', BM,  BMF, BMO,
+    function(pp){return (pp.revP||0) - (pp.costP||0);},
+    function(pp){return (pp.revF||0) - (pp.costF||0);});
 
   h += '</tbody></table></div></details>';
   return h;
@@ -1022,7 +1125,7 @@ function buildTable(agg, txns, plans, catMap, endDate, plsItems) {
   html += '² <em>Админ</em> = расходы проектов 24 (ВСИП Админ) и 26 (ТТ Общие); без НДС и Налога на прибыль. Разбивка: ФОТ+Налоги на ФОТ (кат. 9–11), Командировки (7), Бухгалтерия (17), Проценты к уплате (1008), Прочие — остаток.';
   html += '</div>';
 
-  html += buildProchTable(agg.prochByPid);
+  html += buildCdaTable(agg.cdaByPid);
   return html;
 }
 
