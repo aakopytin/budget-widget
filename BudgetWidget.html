@@ -311,7 +311,10 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
     if (VAT_CAT_IDS[tx.category_id]) return;
 
     var incAmt = parseFloat(tx.income)  || 0;
-    var expAmt = parseFloat(tx.outcome) || 0;
+    var outAmt = parseFloat(tx.outcome) || 0;
+    // Корректировки/возвраты со знаком «−»: для расходных категорий netим income из outcome.
+    // INC_CAT_NAMES-категории (выручка) не корректируются — там income = сам доход.
+    var expAmt = INC_CAT_NAMES[catName] ? outAmt : outAmt - incAmt;
     var isPast = (dt < curMonthStart);  // прошлые месяцы входят в Бюджет
 
     if (EXCL_PIDS[tx.project_id]) return;  // полностью исключённые проекты
@@ -896,9 +899,10 @@ function buildTable(agg, txns, plans, catMap, endDate, plsItems) {
   // Единая строка Админ: Всего + подкатегории как колонки (без отдельной строки итого)
   function adminCols() {
     // Бухгалтерия не отображается отдельно — её суммы включены в «Прочие»
-    var ADMIN_LABELS = ['ФОТ+Налоги\nна ФОТ', 'Командировки', 'Проценты', 'Прочие'];
-    var subP = [agg.adminFotP, agg.adminTripP, agg.adminIntP, agg.adminOthP + agg.adminBuhP];
-    var subF = [agg.adminFotF, agg.adminTripF, agg.adminIntF, agg.adminOthF + agg.adminBuhF];
+    // Кредиты (нетто pid=24) — вставлены перед «Прочими»
+    var ADMIN_LABELS = ['ФОТ+Налоги\nна ФОТ', 'Командировки', 'Проценты', 'Кредиты', 'Прочие'];
+    var subP = [agg.adminFotP, agg.adminTripP, agg.adminIntP, kreditP_, agg.adminOthP + agg.adminBuhP];
+    var subF = [agg.adminFotF, agg.adminTripF, agg.adminIntF, kreditF_, agg.adminOthF + agg.adminBuhF];
     var totalP = agg.adminP, totalF = agg.adminF;
     var nProj = PROJ_COLS.length;
     var nSub  = ADMIN_LABELS.length;
@@ -999,12 +1003,6 @@ function buildTable(agg, txns, plans, catMap, endDate, plsItems) {
   html += gap();
 
   html += adminCols();
-
-  // Кредиты: нетто движение (получение − выплата) по pid=24, только Всего
-  html += section('Кредиты (нетто, pid 24)', kreditProw_, kreditFrow_,
-                  { totalOnly: true,
-                    bg: '#fff7ed', bg2: '#fef5ec', bg3: '#fde8c8',
-                    color: '#92400e' });
 
   html += section('Прибыль',               profitP,  profitF,
                   { italic: true, color: '#15803d',
