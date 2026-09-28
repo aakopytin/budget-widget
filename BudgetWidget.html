@@ -685,9 +685,44 @@ function buildTable(agg, txns, plans, catMap, endDate, plsItems) {
   var markNetP   = vsub(revNetP,    costNetP);
   var markNetF   = vsub(revNetF,    costNetF);
 
-  // Админ: только в колонке «Всего»
-  var adminProw    = ext1(agg.adminP);
-  var adminFrow    = ext1(agg.adminF);
+  var curMonthStart = endDate.slice(0, 7) + '-01';
+
+  // ─── Кредиты pid=24: нетто выплат кредитов/займов (знак «+» = расход) ──
+  // Выплата кредита/займа = положительный расход (как ФОТ, Командировки).
+  // Получение кредита/займа = уменьшает сумму (как возврат расхода).
+  var kreditF_ = 0;
+  txns.forEach(function(tx) {
+    if (+tx.project_id !== 24) return;
+    var dt = tx.date || '';
+    if (!dt || dt < START_DATE || dt > endDate) return;
+    var cn = catMap[tx.category_id] || '';
+    if (cn === 'Выплата кредита' || cn === 'Выплата займа')       kreditF_ += parseFloat(tx.outcome) || 0;
+    else if (cn === 'Получение кредита' || cn === 'Получение займа') kreditF_ -= parseFloat(tx.income)  || 0;
+  });
+  // План = факт прошлых месяцев + будущие plan_money
+  var kreditPpast_ = 0;
+  txns.forEach(function(tx) {
+    if (+tx.project_id !== 24) return;
+    var dt = tx.date || '';
+    if (!dt || dt < START_DATE || dt >= curMonthStart) return;
+    var cn = catMap[tx.category_id] || '';
+    if (cn === 'Выплата кредита' || cn === 'Выплата займа')       kreditPpast_ += parseFloat(tx.outcome) || 0;
+    else if (cn === 'Получение кредита' || cn === 'Получение займа') kreditPpast_ -= parseFloat(tx.income)  || 0;
+  });
+  var kreditPfuture_ = 0;
+  plans.forEach(function(item) {
+    if (+item.project_id !== 24) return;
+    var dt = item.plan_paid_date || '';
+    if (!dt || dt < curMonthStart) return;
+    var cn = catMap[item.category_id] || '';
+    if (cn === 'Выплата кредита' || cn === 'Выплата займа')       kreditPfuture_ += parseFloat(item.total) || 0;
+    else if (cn === 'Получение кредита' || cn === 'Получение займа') kreditPfuture_ -= parseFloat(item.total) || 0;
+  });
+  var kreditP_ = kreditPpast_ + kreditPfuture_;
+
+  // Админ: только в колонке «Всего» (кредиты включены в итог)
+  var adminProw    = ext1(agg.adminP + kreditP_);
+  var adminFrow    = ext1(agg.adminF + kreditF_);
   var adminFotProw  = ext1(agg.adminFotP);
   var adminFotFrow  = ext1(agg.adminFotF);
   var adminTripProw = ext1(agg.adminTripP);
@@ -699,7 +734,7 @@ function buildTable(agg, txns, plans, catMap, endDate, plsItems) {
   var adminOthProw  = ext1(agg.adminOthP);
   var adminOthFrow  = ext1(agg.adminOthF);
 
-  // Прибыль = Наценка без НДС − Админ
+  // Прибыль = Наценка без НДС − Админ (включая кредиты)
   var profitP    = vsub(markNetP, adminProw);
   var profitF    = vsub(markNetF, adminFrow);
 
@@ -710,8 +745,6 @@ function buildTable(agg, txns, plans, catMap, endDate, plsItems) {
   // Чистая прибыль = Прибыль − Налог
   var netProfP   = vsub(profitP, taxP);
   var netProfF   = vsub(profitF, taxF);
-
-  var curMonthStart = endDate.slice(0, 7) + '-01';
 
   // ─── НДС: вычисления для нового раздела ────────────────────────────────
   // Факт = фактические платежи в бюджет (cat=3144, outcome, реальные счета)
@@ -753,7 +786,6 @@ function buildTable(agg, txns, plans, catMap, endDate, plsItems) {
   var vatCurQ_vat = vRevCQ_vat - vCostCQ_vat;
 
   // C: ожидаемый плановый НДС (plan_money-based, из aggregate)
-  // = (плановый НДС итого) − (фактический НДС итого) = разница между vatRevP и vatRevF
   var vatFutureP = (agg.vatRevP[0] - agg.vatCostP[0]) - (agg.vatRevF[0] - agg.vatCostF[0]);
 
   // Остаток = A + B + C; План = Факт + Остаток
@@ -761,40 +793,6 @@ function buildTable(agg, txns, plans, catMap, endDate, plsItems) {
   var vatPlan      = vatFact + vatRemainder;
   var vatPlanRow   = ext1(vatPlan);
   var vatFactRow   = ext1(vatFact);
-
-  // ─── Кредиты pid=24: нетто получение/выплата кредитов и займов ─────────
-  // Факт = нетто по транзакциям pid=24
-  var kreditF_ = 0;
-  txns.forEach(function(tx) {
-    if (+tx.project_id !== 24) return;
-    var dt = tx.date || '';
-    if (!dt || dt < START_DATE || dt > endDate) return;
-    var cn = catMap[tx.category_id] || '';
-    if (cn === 'Получение кредита' || cn === 'Получение займа') kreditF_ += parseFloat(tx.income)  || 0;
-    else if (cn === 'Выплата кредита' || cn === 'Выплата займа') kreditF_ -= parseFloat(tx.outcome) || 0;
-  });
-  // План = факт прошлых месяцев + будущие plan_money
-  var kreditPpast_ = 0;
-  txns.forEach(function(tx) {
-    if (+tx.project_id !== 24) return;
-    var dt = tx.date || '';
-    if (!dt || dt < START_DATE || dt >= curMonthStart) return;
-    var cn = catMap[tx.category_id] || '';
-    if (cn === 'Получение кредита' || cn === 'Получение займа') kreditPpast_ += parseFloat(tx.income)  || 0;
-    else if (cn === 'Выплата кредита' || cn === 'Выплата займа') kreditPpast_ -= parseFloat(tx.outcome) || 0;
-  });
-  var kreditPfuture_ = 0;
-  plans.forEach(function(item) {
-    if (+item.project_id !== 24) return;
-    var dt = item.plan_paid_date || '';
-    if (!dt || dt < curMonthStart) return;
-    var cn = catMap[item.category_id] || '';
-    if (cn === 'Получение кредита' || cn === 'Получение займа') kreditPfuture_ += parseFloat(item.total) || 0;
-    else if (cn === 'Выплата кредита' || cn === 'Выплата займа') kreditPfuture_ -= parseFloat(item.total) || 0;
-  });
-  var kreditP_    = kreditPpast_ + kreditPfuture_;
-  var kreditProw_ = ext1(kreditP_);
-  var kreditFrow_ = ext1(kreditF_);
 
   // ─── HTML-хелперы ─────────────────────────────────────────────────────────
   var CS = 'padding:5px 8px;border-bottom:2px solid #3d5c7a;font-size:10px;' +
@@ -903,7 +901,7 @@ function buildTable(agg, txns, plans, catMap, endDate, plsItems) {
     var ADMIN_LABELS = ['ФОТ+Налоги\nна ФОТ', 'Командировки', 'Проценты', 'Кредиты', 'Прочие'];
     var subP = [agg.adminFotP, agg.adminTripP, agg.adminIntP, kreditP_, agg.adminOthP + agg.adminBuhP];
     var subF = [agg.adminFotF, agg.adminTripF, agg.adminIntF, kreditF_, agg.adminOthF + agg.adminBuhF];
-    var totalP = agg.adminP, totalF = agg.adminF;
+    var totalP = agg.adminP + kreditP_, totalF = agg.adminF + kreditF_;
     var nProj = PROJ_COLS.length;
     var nSub  = ADMIN_LABELS.length;
     var bg1 = '#fff7ed', bg2 = '#fef5ec', bg3 = '#fde8c8';
