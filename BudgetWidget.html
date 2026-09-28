@@ -351,12 +351,10 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
       if (isBezDogovora(prochNameTx)) ci = BEZDOG_COL;
     }
 
-    // «Возвраты клиентам» учитываются в себестоимости Прочих — идентично Budget1,
-    // где isExpense возвращает true для этой категории при proj === 'Прочие'/'Прочие/Закрытые'.
+    // Все не-доходные категории = расход по проекту (аналогично plan_money, где ВСЕ type=40
+    // попадают в costP без фильтра по isProdExpense).
     var isProch  = (ci === PROJ_COLS.length - 1);
-    // Для Прочих: все расходные транзакции включаются в себестоимость
-    // (аналогично plan_money, где ВСЕ type=40 попадают в costP)
-    var isExp    = isProdExpense(catName) || isProch;
+    var isExp    = !INC_CAT_NAMES[catName];
 
     // Факт (все транзакции ≤ endDate)
     if (incAmt > 0 && INC_CAT_NAMES[catName]) addV(revF, ci, incAmt);
