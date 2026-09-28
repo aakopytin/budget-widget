@@ -417,9 +417,9 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
     }
   });
 
-  // ─── 3. Plan_money: только текущий месяц и будущие (org_account_id=36) ───
+  // ─── 3. Plan_money: только текущий месяц и будущие (org_account_id=36 «Бюджетный лимит» или 150 «Внебюджетный лимит») ───
   plans.forEach(function (item) {
-    if (item.org_account_id !== 36) return;
+    if (item.org_account_id !== 36 && item.org_account_id !== 150) return;
     var dt = item.plan_paid_date || '';
     if (!dt || dt < curMonthStart) return;          // только тек. месяц+будущее
     var val     = parseFloat(item.total) || 0;
