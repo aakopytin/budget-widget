@@ -333,6 +333,14 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
     }
 
     if (ADMIN_PIDS[tx.project_id]) {
+      // Процентные доходы ВСИП Офис/ТТ → колонка «Прочие проекты»
+      if (incAmt > 0 && catName === 'Проценты к получению') {
+        var ciAdmR = PROJ_COLS.length - 1;
+        addV(revF, ciAdmR, incAmt);
+        if (isPast) addV(revP, ciAdmR, incAmt);
+        var ppAdmR = getProchPP(tx.project_id);
+        ppAdmR.revF += incAmt; if (isPast) ppAdmR.revP += incAmt;
+      }
       if (expAmt && !ADMIN_EXCL_IDS[tx.category_id]) {
         var cid4 = tx.category_id;
         if      (ADMIN_FOT_IDS[cid4])  { adminFotF  += expAmt; if (isPast) adminFotP  += expAmt; }
@@ -448,6 +456,13 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
     }
 
     if (ADMIN_PIDS[item.project_id]) {
+      // Процентные доходы ВСИП Офис/ТТ (plan_money type=30) → Прочие проекты (без НДС)
+      if (item.type === 30 && catName === 'Проценты к получению') {
+        var ciAdmR2 = PROJ_COLS.length - 1;
+        addV(revP, ciAdmR2, val);
+        var ppAdmR2 = getProchPP(item.project_id);
+        ppAdmR2.revP += val;
+      }
       if (item.type === 40 && !ADMIN_EXCL_IDS[item.category_id]) {
         var cid5 = item.category_id;
         if      (ADMIN_FOT_IDS[cid5])  adminFotP  += val;
