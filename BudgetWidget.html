@@ -885,13 +885,16 @@ function buildTable(agg, txns, plans, catMap, endDate, plsItems) {
   var cq_vat = Math.ceil(mo_vat / 3);
   function pad2vat(n) { return n < 10 ? '0' + n : '' + n; }
   var curQStart_vat = endDate.slice(0, 4) + '-' + pad2vat((cq_vat - 1) * 3 + 1) + '-01';
+  var curQEnd_vat   = (function(){ var lm=cq_vat*3; var ld=(lm===3||lm===12)?31:30;
+    return endDate.slice(0,4)+'-'+pad2vat(lm)+'-'+pad2vat(ld); })();
   var pmdm_vat = {};
   plans.forEach(function(item) { if (item.plan_paid_date) pmdm_vat[item.id] = item.plan_paid_date; });
   function plsRefDt_vat(p) { return (p.plan_money_id && pmdm_vat[p.plan_money_id]) || p.date || ''; }
   var vRevCQ_vat = 0, vCostCQ_vat = 0;
   plsItems.forEach(function(p) {
     var dt = plsRefDt_vat(p);
-    if (!dt || dt < curQStart_vat || dt > endDate) return;
+    if (!dt || dt < curQStart_vat || dt > curQEnd_vat) return;  // период квартала
+    if (!p.date || p.date > endDate) return;                     // as-of
     if (EXCL_PIDS[+p.project_id]) return;
     var acc = p.org_account_id;
     if (acc && !VSIP_ACC_IDS[+acc] && !TT_ACC_IDS[+acc]) return;
@@ -1182,6 +1185,7 @@ function buildCashTable(agg, txns, plsItems, catMap, endDate, bankAccounts) {
     return yr + '-' + pad2(lm) + '-' + pad2(ld);
   }
   var curQStart  = qStart(y, cq);
+  var curQEnd    = qEnd(y, cq);    // конец текущего квартала (для period-attribution PLS)
   var prevQStart = qStart(py, pq);
   var prevQEnd   = qEnd(py, pq);
 
@@ -1271,11 +1275,13 @@ function buildCashTable(agg, txns, plsItems, catMap, endDate, bankAccounts) {
 
   // ── 5. НДС текущего квартала (прогноз) ───────────────────────────────────
   // = НДС начисленный (cat=3147) − НДС к вычету (cat=3144) за текущий квартал
-  // Дата PLS корректируется через pmDateMap.
+  // Период: plan_money-дата ≤ curQEnd (не endDate), чтобы включить записи с
+  // plan_paid_date в конце квартала (напр. 30 сен). As-of: p.date ≤ endDate.
   var vRevCQ = 0, vCostCQ = 0;
   plsItems.forEach(function (p) {
     var dt = plsRefDt(p);
-    if (!dt || dt < curQStart || dt > endDate) return;
+    if (!dt || dt < curQStart || dt > curQEnd) return;   // период квартала
+    if (!p.date || p.date > endDate) return;              // as-of: уже записано
     if (EXCL_PIDS[+p.project_id]) return;
     var acc = p.org_account_id;
     if (acc && !VSIP_ACC_IDS[+acc] && !TT_ACC_IDS[+acc]) return;
