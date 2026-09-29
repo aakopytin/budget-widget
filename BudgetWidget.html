@@ -1327,6 +1327,35 @@ function buildCashTable(agg, txns, plsItems, catMap, endDate, bankAccounts) {
   }, 0);
   var vatPrevQActual = vatPaidTotal - vatRefund;
 
+  // ── Прогноз ДС (реплика Бюджет1) ─────────────────────────────────────────
+  // Формула: bankBal + Ожид.приходы − Ожид.расходы − Ожид.займы
+  //        + (−vatCurQ) − b1VatPlan
+  // Используем plan_money (acct=36/150) с plan_paid_date > endDate.
+  var b1Income = 0, b1Expense = 0, b1Loans = 0, b1VatPlan = 0;
+  _plans.forEach(function(item) {
+    if (item.org_account_id !== 36 && item.org_account_id !== 150) return;
+    var dt = item.plan_paid_date || '';
+    if (!dt || dt <= endDate) return;            // только строго будущие
+    if (EXCL_PIDS[+item.project_id]) return;
+    var cn = catMap[item.category_id] || '';
+    var val = parseFloat(item.total) || 0;
+    if (cn === 'Перевод между счетами (поступление)' ||
+        cn === 'Перевод между счетами (списание)')    return;
+    if (+item.category_id === 3144) { b1VatPlan += val; return; }
+    if (+item.category_id === 3147) { b1VatPlan -= val; return; }
+    if (cn === 'Получение кредита' || cn === 'Получение займа') {
+      b1Loans -= val;   // поступление = уменьшает чистый отток
+    } else if (cn === 'Выплата кредита' || cn === 'Выплата займа') {
+      b1Loans += val;   // погашение = отток
+    } else if (item.type === 30) {
+      b1Income += val;
+    } else if (item.type === 40) {
+      b1Expense += val;
+    }
+  });
+  var b1VatCurrent = -vatCurQ;   // в Бюджет1: >0 = к вычету (возмещение)
+  var b1PlannedBal = bankBal + b1Income - b1Expense - b1Loans + b1VatCurrent - b1VatPlan;
+
   // ── Итоговые строки ───────────────────────────────────────────────────────
   // Формула: Остаток = Остаток_01.01.2024 + ЧП − Внепроектные_безНДС
   //                  + Фин_нетто − НДС_тек − НДС_прош_прогноз
@@ -1396,6 +1425,19 @@ function buildCashTable(agg, txns, plsItems, catMap, endDate, bankAccounts) {
     ? '<span style="color:#d97706">&#9888; расхождение &gt;1 млн</span>'
     : null;
   h += row(ri++, 'Разница (банк − расчётный)',            diff,    diffNote, { bold: true, bg: BG_D });
+
+  // ── Прогноз ДС (Бюджет1) ─────────────────────────────────────────────────
+  var BG_B1 = 'background:#f0f4f9;';
+  h += '<tr><td colspan="3" style="height:8px;' + BG_B1 + 'border:none"></td></tr>';
+  h += '<tr><td colspan="3" style="padding:5px 10px;font-size:11px;font-weight:700;' +
+       'color:#1e3a5f;' + BG_B1 + 'border-bottom:2px solid #3d5c7a">ПРОГНОЗ ДС (Бюджет1)</td></tr>';
+  h += row(ri++, 'Текущий остаток ДС',          bankBal,         null,                           { bg: BG_B1 });
+  h += row(ri++, 'Ожидаемые приходы',            b1Income,        null,                           { bg: BG_B1 });
+  h += row(ri++, 'Ожидаемые расходы',           -b1Expense,       null,                           { bg: BG_B1 });
+  h += row(ri++, 'Ожидаемые займы',             -b1Loans,         null,                           { bg: BG_B1 });
+  h += row(ri++, 'Ожидаемый текущий НДС',        b1VatCurrent,    null,                           { bg: BG_B1 });
+  h += row(ri++, 'Ожидаемый плановый НДС',      -b1VatPlan,       null,                           { bg: BG_B1 });
+  h += row(ri++, 'Плановый остаток ДС',          b1PlannedBal,    null, { bold: true, bg: BG_T });
 
   h += '</tbody></table></div>';
   return h;
