@@ -1153,6 +1153,7 @@ function buildTable(agg, txns, plans, catMap, endDate, plsItems, b1PlannedBal) {
   html += '</div>';
 
   html += buildCdaTable(agg.cdaByPid);
+  html += buildProchTable(agg.prochByPid);
   return html;
 }
 
@@ -1478,23 +1479,11 @@ function calcB1VatForecast(endDate) {
     if (pYM >= curYM) ebPlanGrossForPaid += item.total || 0;
   });
 
-  var _res = {
+  return {
     vatFact:    vfFactVatRes,
     vatPlan:    vfItogoVatRes - vfFactVatRes,
     vfEbExpAdj: ebActualGross - ebPlanGrossForPaid
   };
-  console.log('[B1VAT] vfFVI='+vfFVI.toFixed(0)+' vfFVO='+vfFVO.toFixed(0)+
-              ' vfTVI='+vfTVI.toFixed(0)+' vfTVO='+vfTVO.toFixed(0)+
-              ' vatAdj='+vatAdj.toFixed(0));
-  console.log('[B1VAT] vatFact='+_res.vatFact.toFixed(0)+
-              ' vatPlan='+_res.vatPlan.toFixed(0)+
-              ' vfEbExpAdj='+_res.vfEbExpAdj.toFixed(0));
-  console.log('[B1VAT] ebActualGross='+ebActualGross.toFixed(0)+
-              ' ebPlanGrossForPaid='+ebPlanGrossForPaid.toFixed(0));
-  console.log('[B1VAT] pls.length='+_pls.length+
-              ' plans.length='+_plans.length+
-              ' txns.length='+_txns.length);
-  return _res;
 }
 
 // ── РАСЧЁТ ПРОГНОЗА ДС (Б1) — точная реплика _sumOst + cashBal + НДС ─────────
@@ -1638,14 +1627,6 @@ function calcB1Forecast(endDate) {
 
   // ── 8. Итог ────────────────────────────────────────────────────────────────
   var plannedBal = bankBal + incOst - expOst + finOst + vatFact + vatPlan;
-
-  console.log('[B1FC] bankBal='+bankBal.toFixed(0)+
-              ' incOst='+incOst.toFixed(0)+
-              ' expOst='+expOst.toFixed(0)+
-              ' finOst='+finOst.toFixed(0)+
-              ' vatFact='+vatFact.toFixed(0)+
-              ' vatPlan='+vatPlan.toFixed(0)+
-              ' plannedBal='+plannedBal.toFixed(0));
 
   return { bankBal: bankBal, incOst: incOst, expOst: expOst,
            finOst: finOst, vatFact: vatFact, vatPlan: vatPlan,
