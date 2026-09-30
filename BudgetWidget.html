@@ -900,6 +900,23 @@ function buildTable(agg, txns, plans, catMap, endDate, plsItems, b1PlannedBal) {
   var vatPlanRow   = ext1(vatPlan);
   var vatFactRow   = ext1(vatFact);
 
+  // ─── Наценка без НДС с учётом входящего остатка (только колонка Всего) ───
+  var FIXED_BAL      = 1885180;
+  // Остаток = Наценка с НДС остаток − НДС остаток
+  var markNetOst     = (markGrossP[0] - markGrossF[0]) - vatRemainder;
+  // Факт    = Наценка с НДС факт − НДС факт + начальный остаток
+  var markNetFactAdj = markGrossF[0] - vatFact + FIXED_BAL;
+  // План    = Факт + Остаток
+  var markNetPlanAdj = markNetFactAdj + markNetOst;
+  // Проектные колонки остаются прежними — только Всего (индекс 0) переопределяем
+  var markNetPAdj    = markNetP.slice(); markNetPAdj[0] = markNetPlanAdj;
+  var markNetFAdj    = markNetF.slice(); markNetFAdj[0] = markNetFactAdj;
+  // Каскадный пересчёт Прибыли и Чистой прибыли
+  profitP  = vsub(markNetPAdj, adminProw);
+  profitF  = vsub(markNetFAdj, adminFrow);
+  netProfP = vsub(profitP, taxP);
+  netProfF = vsub(profitF, taxF);
+
   // ─── HTML-хелперы ─────────────────────────────────────────────────────────
   var CS = 'padding:5px 8px;border-bottom:2px solid #3d5c7a;font-size:10px;' +
            'font-weight:600;white-space:nowrap;background:#f0f4f9;color:#374151;';
@@ -1098,21 +1115,10 @@ function buildTable(agg, txns, plans, catMap, endDate, plsItems, b1PlannedBal) {
                   { totalOnly: true,
                     bg: '#faf5ff', bg2: '#f3e8ff', bg3: '#ede9fe',
                     color: '#7c3aed' });
-  // Расшифровка Остатка по НДС
-  (function() {
-    var fmt = function(v) { return (v < 0 ? '−' : '') + Math.abs(Math.round(v)).toLocaleString('ru-RU'); };
-    html += '<tr><td colspan="100" style="padding:2px 8px 4px 24px;font-size:10px;color:#7c3aed;background:#faf5ff">'
-      + '&#x2514; Остаток ' + fmt(vatRemainder) + ' = '
-      + 'A (план. платежи plan_money cat=3144): ' + fmt(vatPlanPmt)
-      + ' + B (Ожид. текущий НДС, = нижней таблице): ' + fmt(vatCurQ_vat)
-      + ' + C (Ожид. плановый НДС, = нижней таблице): ' + fmt(vatFutureP)
-      + '</td></tr>';
-  })();
-
   html += gap();
 
-  // Наценка без НДС = Наценка с НДС − НДС (начисленный, из aggregate)
-  html += section('Наценка без НДС', markNetP, markNetF,
+  // Наценка без НДС с учётом входящего остатка
+  html += section('Наценка без НДС с учётом входящего остатка', markNetPAdj, markNetFAdj,
                   { italic: true, color: '#1e40af' });
 
   html += gap();
