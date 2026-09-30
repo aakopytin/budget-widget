@@ -1566,8 +1566,11 @@ function calcB1Forecast(endDate) {
       if (isE) bePlan[pid] = (bePlan[pid]||0) + val;
 
     } else {
-      // acct=150: внебюджетный лимит — учитываем ВСЕ даты (как в Бюджет1)
+      // acct=150: внебюджетный лимит — только текущий месяц и будущие
+      // (прошлые EB-позиции уже в истории, их оплата не попадает в factCurE)
       if (LOAN_CN[cn] || SKIP_CAT_NAMES[cn] || VAT_CAT_IDS[cid]) return;
+      var ebDt = item.plan_paid_date || '';
+      if (ebDt && ebDt < curMoStart) return;  // skip past EB plans
       if (isI) biEb[pid] = (biEb[pid]||0) + val;
       if (isE) beEb[pid] = (beEb[pid]||0) + val;
     }
