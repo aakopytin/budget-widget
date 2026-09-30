@@ -891,8 +891,8 @@ function buildTable(agg, txns, plans, catMap, endDate, plsItems, b1PlannedBal) {
   // B: Ожидаемый текущий НДС — идентично нижней таблице (с учётом корректировок vatAdj)
   // C: Ожидаемый плановый НДС — идентично нижней таблице
   var _b1vat     = calcB1VatForecast(endDate);
-  var vatCurQ_vat = _b1vat.vatFact;   // B = "Ожидаемый текущий НДС"
-  var vatFutureP  = _b1vat.vatPlan;   // C = "Ожидаемый плановый НДС"
+  var vatCurQ_vat = -_b1vat.vatFact;  // B = "Ожидаемый текущий НДС" (знак расхода: НДС к уплате > 0)
+  var vatFutureP  = -_b1vat.vatPlan;  // C = "Ожидаемый плановый НДС" (знак расхода)
 
   // Остаток = A + B + C; План = Факт + Остаток
   var vatRemainder = vatPlanPmt + vatCurQ_vat + vatFutureP;
