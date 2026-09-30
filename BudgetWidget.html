@@ -888,32 +888,11 @@ function buildTable(agg, txns, plans, catMap, endDate, plsItems, b1PlannedBal) {
     if (+item.category_id === 3144) vatPlanPmt += parseFloat(item.total) || 0;
   });
 
-  // B: расчётный НДС текущего квартала (PLS cat=3147 − 3144, аналогично buildCashTable)
-  var mo_vat = +endDate.slice(5, 7);
-  var cq_vat = Math.ceil(mo_vat / 3);
-  function pad2vat(n) { return n < 10 ? '0' + n : '' + n; }
-  var curQStart_vat = endDate.slice(0, 4) + '-' + pad2vat((cq_vat - 1) * 3 + 1) + '-01';
-  var curQEnd_vat   = (function(){ var lm=cq_vat*3; var ld=(lm===3||lm===12)?31:30;
-    return endDate.slice(0,4)+'-'+pad2vat(lm)+'-'+pad2vat(ld); })();
-  var pmdm_vat = {};
-  plans.forEach(function(item) { if (item.plan_paid_date) pmdm_vat[item.id] = item.plan_paid_date; });
-  function plsRefDt_vat(p) { return (p.plan_money_id && pmdm_vat[p.plan_money_id]) || p.date || ''; }
-  var vRevCQ_vat = 0, vCostCQ_vat = 0;
-  plsItems.forEach(function(p) {
-    var dt = plsRefDt_vat(p);
-    if (!dt || dt < curQStart_vat || dt > curQEnd_vat) return;  // период квартала
-    if (!p.date || p.date > endDate) return;                     // as-of
-    if (EXCL_PIDS[+p.project_id]) return;
-    var acc = p.org_account_id;
-    if (acc && !VSIP_ACC_IDS[+acc] && !TT_ACC_IDS[+acc]) return;
-    var cid = +p.category_id;
-    if (cid === 3147) vRevCQ_vat  += (parseFloat(p.income)  || 0) - (parseFloat(p.outcome) || 0);
-    if (cid === 3144) vCostCQ_vat += (parseFloat(p.outcome) || 0) - (parseFloat(p.income)  || 0);
-  });
-  var vatCurQ_vat = vRevCQ_vat - vCostCQ_vat;
-
-  // C: ожидаемый плановый НДС (plan_money-based, из aggregate)
-  var vatFutureP = (agg.vatRevP[0] - agg.vatCostP[0]) - (agg.vatRevF[0] - agg.vatCostF[0]);
+  // B: Ожидаемый текущий НДС — идентично нижней таблице (с учётом корректировок vatAdj)
+  // C: Ожидаемый плановый НДС — идентично нижней таблице
+  var _b1vat     = calcB1VatForecast(endDate);
+  var vatCurQ_vat = _b1vat.vatFact;   // B = "Ожидаемый текущий НДС"
+  var vatFutureP  = _b1vat.vatPlan;   // C = "Ожидаемый плановый НДС"
 
   // Остаток = A + B + C; План = Факт + Остаток
   var vatRemainder = vatPlanPmt + vatCurQ_vat + vatFutureP;
@@ -1119,6 +1098,16 @@ function buildTable(agg, txns, plans, catMap, endDate, plsItems, b1PlannedBal) {
                   { totalOnly: true,
                     bg: '#faf5ff', bg2: '#f3e8ff', bg3: '#ede9fe',
                     color: '#7c3aed' });
+  // Расшифровка Остатка по НДС
+  (function() {
+    var fmt = function(v) { return (v < 0 ? '−' : '') + Math.abs(Math.round(v)).toLocaleString('ru-RU'); };
+    html += '<tr><td colspan="100" style="padding:2px 8px 4px 24px;font-size:10px;color:#7c3aed;background:#faf5ff">'
+      + '&#x2514; Остаток ' + fmt(vatRemainder) + ' = '
+      + 'A (план. платежи plan_money cat=3144): ' + fmt(vatPlanPmt)
+      + ' + B (Ожид. текущий НДС, = нижней таблице): ' + fmt(vatCurQ_vat)
+      + ' + C (Ожид. плановый НДС, = нижней таблице): ' + fmt(vatFutureP)
+      + '</td></tr>';
+  })();
 
   html += gap();
 
