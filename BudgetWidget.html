@@ -310,9 +310,9 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
   txns.forEach(function (tx) {
     var dt = tx.date || '';
     if (!dt || dt < START_DATE || dt > endDate) return;
-    // Только реальные банковские счета ВСИП и ТТ (идентично Budget1)
+    // Все реальные банковские счета (REAL_ACC включает ТТ Депозиты 42, 120)
     var acct = tx.org_account_id;
-    if (!VSIP_ACC_IDS[acct] && !TT_ACC_IDS[acct]) return;
+    if (!REAL_ACC[acct]) return;
     var catName = catMap[tx.category_id] || '';
     if (SKIP_CAT_NAMES[catName]) return;
     if (VAT_CAT_IDS[tx.category_id]) return;
@@ -333,8 +333,8 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
     }
 
     if (ADMIN_PIDS[tx.project_id]) {
-      // Процентные доходы ВСИП Офис/ТТ → колонка «Прочие проекты»
-      if (incAmt > 0 && catName === 'Проценты к получению') {
+      // Процентные и прочие доходы ВСИП/ТТ → колонка «Прочие проекты» (без НДС)
+      if (incAmt > 0 && (catName === 'Проценты к получению' || catName === 'Прочий доход')) {
         var ciAdmR = PROJ_COLS.length - 1;
         addV(revF, ciAdmR, incAmt);
         if (isPast) addV(revP, ciAdmR, incAmt);
@@ -402,7 +402,7 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
     var dt = p.date || '';
     if (!dt || dt < START_DATE || dt > endDate) return;
     var acctP = p.org_account_id;
-    if (acctP && !VSIP_ACC_IDS[acctP] && !TT_ACC_IDS[acctP]) return;
+    if (acctP && !REAL_ACC[acctP]) return;
     if (EXCL_PIDS[p.project_id]) return;
     var ci = colIdx(p.project_id);
     if (ci < 0) return;
@@ -456,8 +456,8 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
     }
 
     if (ADMIN_PIDS[item.project_id]) {
-      // Процентные доходы ВСИП Офис/ТТ (plan_money type=30) → Прочие проекты (без НДС)
-      if (item.type === 30 && catName === 'Проценты к получению') {
+      // Процентные и прочие доходы ВСИП/ТТ (plan_money type=30) → Прочие проекты (без НДС)
+      if (item.type === 30 && (catName === 'Проценты к получению' || catName === 'Прочий доход')) {
         var ciAdmR2 = PROJ_COLS.length - 1;
         addV(revP, ciAdmR2, val);
         var ppAdmR2 = getProchPP(item.project_id);
