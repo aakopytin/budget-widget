@@ -1163,34 +1163,145 @@ function setStatus(msg) {
   if (el) el.innerHTML = msg;
 }
 
-// ── РАСЧЁТ ПЛАНОВОГО ОСТАТКА ДС (Б1) ─────────────────────────────────────────
+// ── РАСЧЁТ ПРОГНОЗА ДС (Б1) — точная реплика _sumOst из виджета Бюджет1 ───────
 //
-// Реплицирует формулу из buildCashTable:
-//   bankBal + b1Income − b1Expense − b1Loans + (−vatCurQ) − b1VatPlan
-// Использует глобальные кэши _txns, _pls, _plans, _cats.
+// Возвращает объект {bankBal, incOst, expOst, finOst, vatFact, vatPlan, plannedBal}.
 //
-function calcB1PlannedBal(endDate) {
-  // 1. Остаток по банку
+// Алгоритм:
+//   incOst = Σ(по pid где bi_plan+bi_eb > 0) (bi_plan + bi_eb − factCurI)
+//   expOst = Σ(по pid где be_plan+be_eb > 0) (be_plan + be_eb − factCurE)
+//   finOst = skInO − skOutO   (skInO = planSkIn − factSkIn, только если planSkIn > 0)
+//   plannedBal = bankBal + incOst − expOst + finOst + vatFact + vatPlan
+//
+function calcB1Forecast(endDate) {
+  var LOAN_CN = {'Получение займа':1,'Выплата займа':1,'Получение кредита':1,'Выплата кредита':1};
+  var OXR_B1  = {24:1, 26:1};  // офисные проекты (финансовая деятельность в Бюджет1)
+  // Все PID из PID_MAP Бюджет1 — только они участвуют в incOst/expOst
+  var VALID_PID = {1:1,2:1,3:1,4:1,6:1,7:1,9:1,10:1,12:1,13:1,17:1,18:1,19:1,
+                   20:1,21:1,22:1,23:1,24:1,25:1,26:1,29:1,30:1,31:1,32:1,33:1,35:1};
+
+  var curYr = +endDate.slice(0,4), curMo = +endDate.slice(5,7);
+  var curMoStart = endDate.slice(0,7) + '-01';
+  function _p2(n) { return n < 10 ? '0' + n : '' + n; }
+
+  // ── 1. Остаток по банку ─────────────────────────────────────────────────────
   var bankBal = 0;
   _txns.forEach(function(tx) {
     if (!tx.date || tx.date > endDate) return;
     if (REAL_ACC[+tx.org_account_id])
-      bankBal += (parseFloat(tx.income) || 0) - (parseFloat(tx.outcome) || 0);
+      bankBal += (parseFloat(tx.income)||0) - (parseFloat(tx.outcome)||0);
   });
 
-  // 2. НДС текущего квартала из PLS (3147 − 3144)
-  var mo = +endDate.slice(5, 7);
-  var cq = Math.ceil(mo / 3);
-  function _p2(n) { return n < 10 ? '0' + n : '' + n; }
-  var qs = endDate.slice(0, 4) + '-' + _p2((cq - 1) * 3 + 1) + '-01';
-  var qlm = cq * 3;
-  var qe  = endDate.slice(0, 4) + '-' + _p2(qlm) + '-' + _p2((qlm === 3 || qlm === 12) ? 31 : 30);
-  var pmdm = {};
-  _plans.forEach(function(pm) { if (pm.plan_paid_date) pmdm[pm.id] = pm.plan_paid_date; });
+  // ── 2. Плановые суммы по проектам (из plan_money) ──────────────────────────
+  // biPlan[pid]  — план доходов acct=36, date>=curMoStart, без займов/НДС/переводов
+  // bePlan[pid]  — план расходов acct=36, аналогично
+  // biEb[pid]    — внебюдж. лимит доходов acct=150, ВСЕ даты (без фильтра!)
+  // beEb[pid]    — внебюдж. лимит расходов acct=150, аналогично
+  // planSkIn/Out — займы OXR/pid=35, acct=36, date>=curMoStart
+  var biPlan = {}, bePlan = {}, biEb = {}, beEb = {};
+  var planSkIn = 0, planSkOut = 0;
+
+  _plans.forEach(function(item) {
+    var pid = +(item.project_id);
+    if (!VALID_PID[pid]) return;
+    var acc = +(item.org_account_id);
+    if (acc !== 36 && acc !== 150) return;
+    var cid = +(item.category_id);
+    var cn  = (_cats && _cats[cid]) || '';
+    var val = parseFloat(item.total) || 0;
+    if (!val) return;
+    var isI = (item.type === 30), isE = (item.type === 40);
+
+    if (acc === 36) {
+      var dt = item.plan_paid_date || '';
+      if (!dt) return;
+      // Займы OXR-проектов и pid=35 → в финансовую деятельность (planSk)
+      if (LOAN_CN[cn] && (OXR_B1[pid] || pid === 35)) {
+        if (dt >= curMoStart) {
+          if (isI) planSkIn  += val;
+          if (isE) planSkOut += val;
+        }
+        return;
+      }
+      if (LOAN_CN[cn] || dt < curMoStart) return;
+      if (SKIP_CAT_NAMES[cn] || VAT_CAT_IDS[cid]) return;
+      if (isI) biPlan[pid] = (biPlan[pid]||0) + val;
+      if (isE) bePlan[pid] = (bePlan[pid]||0) + val;
+
+    } else {
+      // acct=150: внебюджетный лимит — учитываем ВСЕ даты (как в Бюджет1)
+      if (LOAN_CN[cn] || SKIP_CAT_NAMES[cn] || VAT_CAT_IDS[cid]) return;
+      if (isI) biEb[pid] = (biEb[pid]||0) + val;
+      if (isE) beEb[pid] = (beEb[pid]||0) + val;
+    }
+  });
+
+  // ── 3. Факт текущего месяца по проектам (из транзакций) ──────────────────
+  // factCurI[pid] — доходы INC_CAT_NAMES, REAL_ACC, curMoStart..endDate
+  // factCurE[pid] — расходы !SKIP !LOAN !VAT, REAL_ACC, curMoStart..endDate
+  // factSkIn/Out  — займы/кредиты, ВСЕ счета (как в Бюджет1: fin.skIn.fCur без REAL_ACC)
+  var factCurI = {}, factCurE = {};
+  var factSkIn = 0, factSkOut = 0;
+
+  _txns.forEach(function(tx) {
+    var dt = tx.date || '';
+    if (!dt || dt < curMoStart || dt > endDate) return;
+    var cid = +(tx.category_id);
+    var cn  = (_cats && _cats[cid]) || '';
+    var inc = parseFloat(tx.income)  || 0;
+    var out = parseFloat(tx.outcome) || 0;
+
+    // Займы → factSk (все счета, без фильтра REAL_ACC — как в Бюджет1)
+    if (cn === 'Получение кредита' || cn === 'Получение займа') { if (inc) factSkIn  += inc; return; }
+    if (cn === 'Выплата кредита'   || cn === 'Выплата займа')   { if (out) factSkOut += out; return; }
+
+    // Остальные — только REAL_ACC
+    if (!REAL_ACC[+tx.org_account_id]) return;
+    if (SKIP_CAT_NAMES[cn] || VAT_CAT_IDS[cid]) return;
+
+    var pid = +(tx.project_id);
+    if (!VALID_PID[pid]) return;
+
+    if (inc && INC_CAT_NAMES[cn])  factCurI[pid] = (factCurI[pid]||0) + inc;
+    if (out && !INC_CAT_NAMES[cn]) factCurE[pid] = (factCurE[pid]||0) + out;
+  });
+
+  // ── 4. incOst: Σ по pid с планом > 0 ───────────────────────────────────────
+  var incOst = 0;
+  var _iset = {};
+  Object.keys(biPlan).forEach(function(p){_iset[p]=1;});
+  Object.keys(biEb).forEach(function(p){_iset[p]=1;});
+  Object.keys(_iset).forEach(function(p) {
+    var bi = (biPlan[p]||0) + (biEb[p]||0);
+    if (bi > 0) incOst += bi - (factCurI[p]||0);
+  });
+
+  // ── 5. expOst: Σ по pid с планом > 0 ───────────────────────────────────────
+  var expOst = 0;
+  var _eset = {};
+  Object.keys(bePlan).forEach(function(p){_eset[p]=1;});
+  Object.keys(beEb).forEach(function(p){_eset[p]=1;});
+  Object.keys(_eset).forEach(function(p) {
+    var be = (bePlan[p]||0) + (beEb[p]||0);
+    if (be > 0) expOst += be - (factCurE[p]||0);
+  });
+
+  // ── 6. finOst = skInO − skOutO ─────────────────────────────────────────────
+  var skInO  = planSkIn  > 0 ? planSkIn  - factSkIn  : 0;
+  var skOutO = planSkOut > 0 ? planSkOut - factSkOut : 0;
+  var finOst = skInO - skOutO;  // <0 = чистые погашения займов
+
+  // ── 7. НДС текущего квартала из PLS ────────────────────────────────────────
+  var _cq  = Math.ceil(curMo / 3);
+  var _qs  = curYr + '-' + _p2((_cq - 1) * 3 + 1) + '-01';
+  var _qlm = _cq * 3;
+  var _qe  = curYr + '-' + _p2(_qlm) + '-' + _p2((_qlm === 3 || _qlm === 12) ? 31 : 30);
+  var _pmdm = {};
+  _plans.forEach(function(pm) { if (pm.plan_paid_date) _pmdm[pm.id] = pm.plan_paid_date; });
   var vRev = 0, vCost = 0;
   _pls.forEach(function(p) {
-    var dt = (p.plan_money_id && pmdm[p.plan_money_id]) || p.date || '';
-    if (!dt || dt < qs || dt > qe) return;
+    var dt = (_pmdm[p.plan_money_id]) || p.date || '';
+    if (!dt || dt < _qs || dt > _qe) return;
     if (!p.date || p.date > endDate) return;
     if (EXCL_PIDS[+p.project_id]) return;
     var acc = p.org_account_id;
@@ -1200,49 +1311,26 @@ function calcB1PlannedBal(endDate) {
     if (cid === 3144) vCost += (parseFloat(p.outcome) || 0) - (parseFloat(p.income)  || 0);
   });
   var vatCurQ = vRev - vCost;
+  var vatFact = -vatCurQ;   // >0 = к возмещению; <0 = к уплате (≡ _vF в Бюджет1)
 
-  // 3. Ожидаемые движения: план от начала текущего месяца (acct 36/150), минус факт тек. месяца
-  var mo2 = +endDate.slice(5, 7);
-  var curMoStart = endDate.slice(0, 4) + '-' + _p2(mo2) + '-01';
-
-  var b1Income = 0, b1Expense = 0, b1Loans = 0, b1VatPlan = 0;
+  // ── 8. Плановый НДС (cat=3144/3147, от curMoStart+) ────────────────────────
+  // vatPlan > 0 = к возмещению; vatPlan < 0 = к уплате (≡ _vP в Бюджет1)
+  var vatPlan = 0;
   _plans.forEach(function(item) {
-    if (item.org_account_id !== 36 && item.org_account_id !== 150) return;
+    if (+item.org_account_id !== 36) return;
     var dt = item.plan_paid_date || '';
-    if (!dt || dt < curMoStart) return;   // от начала текущего месяца
-    if (EXCL_PIDS[+item.project_id]) return;
-    var cn = (_cats && _cats[item.category_id]) || '';
-    if (cn === 'Перевод между счетами (поступление)' ||
-        cn === 'Перевод между счетами (списание)') return;
-    var val = parseFloat(item.total) || 0;
-    if (+item.category_id === 3144) { b1VatPlan += val; return; }
-    if (+item.category_id === 3147) { b1VatPlan -= val; return; }
-    if (cn === 'Получение кредита' || cn === 'Получение займа') b1Loans -= val;
-    else if (cn === 'Выплата кредита' || cn === 'Выплата займа') b1Loans += val;
-    else if (item.type === 30) b1Income += val;
-    else if (item.type === 40) b1Expense += val;
-  });
-  // Вычитаем факт текущего месяца
-  _txns.forEach(function(tx) {
-    var dt = tx.date || '';
-    if (!dt || dt < curMoStart || dt > endDate) return;
-    if (!REAL_ACC[+tx.org_account_id]) return;
-    var cid = +tx.category_id;
-    if (VAT_CAT_IDS[cid]) return;
-    var cn = (_cats && _cats[cid]) || '';
-    if (cn === 'Перевод между счетами (поступление)' ||
-        cn === 'Перевод между счетами (списание)') return;
-    if (cn === 'Получение кредита' || cn === 'Получение займа') {
-      b1Loans += parseFloat(tx.income)   || 0;
-    } else if (cn === 'Выплата кредита' || cn === 'Выплата займа') {
-      b1Loans -= parseFloat(tx.outcome)  || 0;
-    } else {
-      b1Income  -= parseFloat(tx.income)  || 0;
-      b1Expense -= parseFloat(tx.outcome) || 0;
-    }
+    if (!dt || dt < curMoStart) return;
+    var cid = +item.category_id;
+    if (cid === 3144) vatPlan -= parseFloat(item.total) || 0;   // к уплате
+    if (cid === 3147) vatPlan += parseFloat(item.total) || 0;   // к возмещению
   });
 
-  return bankBal + b1Income - b1Expense - b1Loans + (-vatCurQ) - b1VatPlan;
+  // ── 9. Итог ────────────────────────────────────────────────────────────────
+  var plannedBal = bankBal + incOst - expOst + finOst + vatFact + vatPlan;
+
+  return { bankBal: bankBal, incOst: incOst, expOst: expOst,
+           finOst: finOst, vatFact: vatFact, vatPlan: vatPlan,
+           plannedBal: plannedBal };
 }
 
 // ── ТАБЛИЦА ДЕНЕЖНОЙ ПОЗИЦИИ ──────────────────────────────────────────────────
@@ -1260,7 +1348,7 @@ function calcB1PlannedBal(endDate) {
 //   vatPrevQFore = нет платежей → расчётный; первый платёж → первый×3
 //   vatPrevQAct  = сумма фактических платежей cat=3144 − возмещений cat=3147
 
-function buildCashTable(agg, txns, plsItems, catMap, endDate, bankAccounts) {
+function buildCashTable(agg, txns, plsItems, catMap, endDate, bankAccounts, b1fc) {
   'use strict';
 
   // ── Квартальные границы ──────────────────────────────────────────────────
@@ -1425,53 +1513,9 @@ function buildCashTable(agg, txns, plsItems, catMap, endDate, bankAccounts) {
   }, 0);
   var vatPrevQActual = vatPaidTotal - vatRefund;
 
-  // ── Прогноз ДС (реплика Бюджет1) ─────────────────────────────────────────
-  // Алгоритм совпадает с Бюджет1 (_sumOst):
-  //   plan от начала текущего месяца (>= curMonthStart) − факт текущего месяца.
-  // Это даёт «остаток к оплате/получению» за текущий и будущие месяцы.
-  var b1Income = 0, b1Expense = 0, b1Loans = 0, b1VatPlan = 0;
-  _plans.forEach(function(item) {
-    if (item.org_account_id !== 36 && item.org_account_id !== 150) return;
-    var dt = item.plan_paid_date || '';
-    if (!dt || dt < curMonthStart) return;   // от начала текущего месяца (как в Бюджет1)
-    if (EXCL_PIDS[+item.project_id]) return;
-    var cn = catMap[item.category_id] || '';
-    var val = parseFloat(item.total) || 0;
-    if (cn === 'Перевод между счетами (поступление)' ||
-        cn === 'Перевод между счетами (списание)')    return;
-    if (+item.category_id === 3144) { b1VatPlan += val; return; }
-    if (+item.category_id === 3147) { b1VatPlan -= val; return; }
-    if (cn === 'Получение кредита' || cn === 'Получение займа') {
-      b1Loans -= val;
-    } else if (cn === 'Выплата кредита' || cn === 'Выплата займа') {
-      b1Loans += val;
-    } else if (item.type === 30) {
-      b1Income += val;
-    } else if (item.type === 40) {
-      b1Expense += val;
-    }
-  });
-  // Вычитаем фактически исполненный текущий месяц (как Бюджет1 вычитает iCur/eCur)
-  txns.forEach(function(tx) {
-    var dt = tx.date || '';
-    if (!dt || dt < curMonthStart || dt > endDate) return;
-    if (!REAL_ACC[+tx.org_account_id]) return;
-    var cid = +tx.category_id;
-    if (VAT_CAT_IDS[cid]) return;
-    var cn = catMap[cid] || '';
-    if (cn === 'Перевод между счетами (поступление)' ||
-        cn === 'Перевод между счетами (списание)') return;
-    if (cn === 'Получение кредита' || cn === 'Получение займа') {
-      b1Loans += parseFloat(tx.income)   || 0;
-    } else if (cn === 'Выплата кредита' || cn === 'Выплата займа') {
-      b1Loans -= parseFloat(tx.outcome)  || 0;
-    } else {
-      b1Income  -= parseFloat(tx.income)  || 0;
-      b1Expense -= parseFloat(tx.outcome) || 0;
-    }
-  });
-  var b1VatCurrent = -vatCurQ;   // >0 = к возмещению; <0 = к уплате
-  var b1PlannedBal = bankBal + b1Income - b1Expense - b1Loans + b1VatCurrent - b1VatPlan;
+  // ── Прогноз ДС (Бюджет1) — берём готовые компоненты из calcB1Forecast ──────
+  // Расчёт вынесен в calcB1Forecast() и передаётся через параметр b1fc.
+  // b1fc = { bankBal, incOst, expOst, finOst, vatFact, vatPlan, plannedBal }
 
   // ── Итоговые строки ───────────────────────────────────────────────────────
   // Формула: Остаток = Остаток_01.01.2024 + ЧП − Внепроектные_безНДС
@@ -1548,13 +1592,13 @@ function buildCashTable(agg, txns, plsItems, catMap, endDate, bankAccounts) {
   h += '<tr><td colspan="3" style="height:8px;' + BG_B1 + 'border:none"></td></tr>';
   h += '<tr><td colspan="3" style="padding:5px 10px;font-size:11px;font-weight:700;' +
        'color:#1e3a5f;' + BG_B1 + 'border-bottom:2px solid #3d5c7a">ПРОГНОЗ ДС (Бюджет1)</td></tr>';
-  h += row(ri++, 'Текущий остаток ДС',          bankBal,         null,                           { bg: BG_B1 });
-  h += row(ri++, 'Ожидаемые приходы',            b1Income,        null,                           { bg: BG_B1 });
-  h += row(ri++, 'Ожидаемые расходы',           -b1Expense,       null,                           { bg: BG_B1 });
-  h += row(ri++, 'Ожидаемые займы',             -b1Loans,         null,                           { bg: BG_B1 });
-  h += row(ri++, 'Ожидаемый текущий НДС',        b1VatCurrent,    null,                           { bg: BG_B1 });
-  h += row(ri++, 'Ожидаемый плановый НДС',      -b1VatPlan,       null,                           { bg: BG_B1 });
-  h += row(ri++, 'Плановый остаток ДС',          b1PlannedBal,    null, { bold: true, bg: BG_T });
+  h += row(ri++, 'Текущий остаток ДС',          b1fc.bankBal,    null,                           { bg: BG_B1 });
+  h += row(ri++, 'Ожидаемые приходы',            b1fc.incOst,     null,                           { bg: BG_B1 });
+  h += row(ri++, 'Ожидаемые расходы',           -b1fc.expOst,     null,                           { bg: BG_B1 });
+  h += row(ri++, 'Ожидаемые займы',              b1fc.finOst,     null,                           { bg: BG_B1 });
+  h += row(ri++, 'Ожидаемый текущий НДС',        b1fc.vatFact,    null,                           { bg: BG_B1 });
+  h += row(ri++, 'Ожидаемый плановый НДС',        b1fc.vatPlan,    null,                           { bg: BG_B1 });
+  h += row(ri++, 'Плановый остаток ДС',          b1fc.plannedBal, null, { bold: true, bg: BG_T });
 
   h += '</tbody></table></div>';
   return h;
@@ -1579,9 +1623,9 @@ function render() {
   setStatus('&#9679; расчёт...');
   try {
     var agg  = aggregate(_plans, _txns, _pls, _cats, endDate);
-    var b1Bal = calcB1PlannedBal(endDate);
-    var html = buildTable(agg, _txns, _plans, _cats, endDate, _pls, b1Bal);
-    html += buildCashTable(agg, _txns, _pls, _cats, endDate, _bankAccounts);
+    var b1fc = calcB1Forecast(endDate);
+    var html = buildTable(agg, _txns, _plans, _cats, endDate, _pls, b1fc.plannedBal);
+    html += buildCashTable(agg, _txns, _pls, _cats, endDate, _bankAccounts, b1fc);
     document.getElementById('content').innerHTML = html;
     var dt = endDate.split('-').reverse().join('.');
     setStatus('&#9679; данные на ' + dt);
