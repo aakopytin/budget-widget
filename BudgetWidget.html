@@ -781,6 +781,14 @@ function fmtOst(v, bold) {
 
 function buildTable(agg, txns, plans, catMap, endDate, plsItems, b1PlannedBal) {
 
+  // Добавляем b1PlannedBal в план себестоимости «Прочих проектов» ДО производных расчётов.
+  // Это корректирует «остаток» Себестоимости в колонке «Прочие проекты» и каскадно
+  // пересчитывает Наценку, Прибыль и Чистую прибыль.
+  if (b1PlannedBal !== undefined && b1PlannedBal !== null) {
+    agg.costP[0] += b1PlannedBal;                 // Всего
+    agg.costP[PROJ_COLS.length] += b1PlannedBal;  // Прочие проекты (последний индекс)
+  }
+
   // Вспомогательные операции над массивами длиной NC
   function vsub(a, b) { return a.map(function (v, i) { return v - b[i]; }); }
   function ext1(val)  {
@@ -1100,29 +1108,6 @@ function buildTable(agg, txns, plans, catMap, endDate, plsItems, b1PlannedBal) {
   html += section('Выручка с НДС',        agg.revP,  agg.revF);
   html += section('Себестоимость с НДС',  agg.costP, agg.costF);
 
-  // Плановый остаток ДС (Б1) — дополнительная строка в расходной части «Прочих проектов».
-  // Положительный остаток → расход с плюсом; отрицательный → расход с минусом.
-  if (b1PlannedBal !== undefined && b1PlannedBal !== null) {
-    var BG_B1R  = '#eef3fa';
-    var lastCI  = PROJ_COLS.length - 1;
-    html += '<tr>';
-    html += tdL('<span style="font-size:10px;font-weight:600;color:#1e3a5f">Плановый остаток ДС (Б1)</span>',
-                BG_B1R, 'border-top:1px solid #dbeafe');
-    html += tdL('<span style="font-size:10px;color:#6b7280">прогноз</span>', BG_B1R,
-                'border-top:1px solid #dbeafe');
-    // Всего = то же значение (все числа → в «Прочие проекты»)
-    html += tdV(fmtK(b1PlannedBal, true), BG_B1R,
-                'font-weight:600;border-top:1px solid #dbeafe;border-bottom:2px solid #bfdbfe');
-    for (var _i = 0; _i < PROJ_COLS.length; _i++) {
-      html += tdV(
-        _i === lastCI ? fmtK(b1PlannedBal) : '',
-        BG_B1R,
-        'border-top:1px solid #dbeafe;border-bottom:2px solid #bfdbfe'
-      );
-    }
-    html += '</tr>';
-  }
-
   html += section('Наценка с НДС',        markGrossP, markGrossF,
                   { italic: true, color: '#1e40af' });
 
@@ -1216,12 +1201,15 @@ function calcB1PlannedBal(endDate) {
   });
   var vatCurQ = vRev - vCost;
 
-  // 3. Ожидаемые движения из будущих plan_money бюджетных счетов (acct 36 / 150)
+  // 3. Ожидаемые движения: план от начала текущего месяца (acct 36/150), минус факт тек. месяца
+  var mo2 = +endDate.slice(5, 7);
+  var curMoStart = endDate.slice(0, 4) + '-' + _p2(mo2) + '-01';
+
   var b1Income = 0, b1Expense = 0, b1Loans = 0, b1VatPlan = 0;
   _plans.forEach(function(item) {
     if (item.org_account_id !== 36 && item.org_account_id !== 150) return;
     var dt = item.plan_paid_date || '';
-    if (!dt || dt <= endDate) return;
+    if (!dt || dt < curMoStart) return;   // от начала текущего месяца
     if (EXCL_PIDS[+item.project_id]) return;
     var cn = (_cats && _cats[item.category_id]) || '';
     if (cn === 'Перевод между счетами (поступление)' ||
@@ -1233,6 +1221,25 @@ function calcB1PlannedBal(endDate) {
     else if (cn === 'Выплата кредита' || cn === 'Выплата займа') b1Loans += val;
     else if (item.type === 30) b1Income += val;
     else if (item.type === 40) b1Expense += val;
+  });
+  // Вычитаем факт текущего месяца
+  _txns.forEach(function(tx) {
+    var dt = tx.date || '';
+    if (!dt || dt < curMoStart || dt > endDate) return;
+    if (!REAL_ACC[+tx.org_account_id]) return;
+    var cid = +tx.category_id;
+    if (VAT_CAT_IDS[cid]) return;
+    var cn = (_cats && _cats[cid]) || '';
+    if (cn === 'Перевод между счетами (поступление)' ||
+        cn === 'Перевод между счетами (списание)') return;
+    if (cn === 'Получение кредита' || cn === 'Получение займа') {
+      b1Loans += parseFloat(tx.income)   || 0;
+    } else if (cn === 'Выплата кредита' || cn === 'Выплата займа') {
+      b1Loans -= parseFloat(tx.outcome)  || 0;
+    } else {
+      b1Income  -= parseFloat(tx.income)  || 0;
+      b1Expense -= parseFloat(tx.outcome) || 0;
+    }
   });
 
   return bankBal + b1Income - b1Expense - b1Loans + (-vatCurQ) - b1VatPlan;
@@ -1268,10 +1275,11 @@ function buildCashTable(agg, txns, plsItems, catMap, endDate, bankAccounts) {
     var ld = (lm === 3 || lm === 12) ? 31 : 30;  // Q1/Q4=31дн, Q2/Q3=30дн
     return yr + '-' + pad2(lm) + '-' + pad2(ld);
   }
-  var curQStart  = qStart(y, cq);
-  var curQEnd    = qEnd(y, cq);    // конец текущего квартала (для period-attribution PLS)
-  var prevQStart = qStart(py, pq);
-  var prevQEnd   = qEnd(py, pq);
+  var curQStart    = qStart(y, cq);
+  var curQEnd      = qEnd(y, cq);    // конец текущего квартала (для period-attribution PLS)
+  var prevQStart   = qStart(py, pq);
+  var prevQEnd     = qEnd(py, pq);
+  var curMonthStart = y + '-' + pad2(mo) + '-01';  // начало текущего месяца
 
   // ── pmDateMap: дата plan_money для корректного isPast у PLS ─────────────
   // (та же логика, что и в aggregate — нужна для vatRevF/vatCostF по квартально)
@@ -1418,14 +1426,14 @@ function buildCashTable(agg, txns, plsItems, catMap, endDate, bankAccounts) {
   var vatPrevQActual = vatPaidTotal - vatRefund;
 
   // ── Прогноз ДС (реплика Бюджет1) ─────────────────────────────────────────
-  // Формула: bankBal + Ожид.приходы − Ожид.расходы − Ожид.займы
-  //        + (−vatCurQ) − b1VatPlan
-  // Используем plan_money (acct=36/150) с plan_paid_date > endDate.
+  // Алгоритм совпадает с Бюджет1 (_sumOst):
+  //   plan от начала текущего месяца (>= curMonthStart) − факт текущего месяца.
+  // Это даёт «остаток к оплате/получению» за текущий и будущие месяцы.
   var b1Income = 0, b1Expense = 0, b1Loans = 0, b1VatPlan = 0;
   _plans.forEach(function(item) {
     if (item.org_account_id !== 36 && item.org_account_id !== 150) return;
     var dt = item.plan_paid_date || '';
-    if (!dt || dt <= endDate) return;            // только строго будущие
+    if (!dt || dt < curMonthStart) return;   // от начала текущего месяца (как в Бюджет1)
     if (EXCL_PIDS[+item.project_id]) return;
     var cn = catMap[item.category_id] || '';
     var val = parseFloat(item.total) || 0;
@@ -1434,16 +1442,35 @@ function buildCashTable(agg, txns, plsItems, catMap, endDate, bankAccounts) {
     if (+item.category_id === 3144) { b1VatPlan += val; return; }
     if (+item.category_id === 3147) { b1VatPlan -= val; return; }
     if (cn === 'Получение кредита' || cn === 'Получение займа') {
-      b1Loans -= val;   // поступление = уменьшает чистый отток
+      b1Loans -= val;
     } else if (cn === 'Выплата кредита' || cn === 'Выплата займа') {
-      b1Loans += val;   // погашение = отток
+      b1Loans += val;
     } else if (item.type === 30) {
       b1Income += val;
     } else if (item.type === 40) {
       b1Expense += val;
     }
   });
-  var b1VatCurrent = -vatCurQ;   // в Бюджет1: >0 = к вычету (возмещение)
+  // Вычитаем фактически исполненный текущий месяц (как Бюджет1 вычитает iCur/eCur)
+  txns.forEach(function(tx) {
+    var dt = tx.date || '';
+    if (!dt || dt < curMonthStart || dt > endDate) return;
+    if (!REAL_ACC[+tx.org_account_id]) return;
+    var cid = +tx.category_id;
+    if (VAT_CAT_IDS[cid]) return;
+    var cn = catMap[cid] || '';
+    if (cn === 'Перевод между счетами (поступление)' ||
+        cn === 'Перевод между счетами (списание)') return;
+    if (cn === 'Получение кредита' || cn === 'Получение займа') {
+      b1Loans += parseFloat(tx.income)   || 0;
+    } else if (cn === 'Выплата кредита' || cn === 'Выплата займа') {
+      b1Loans -= parseFloat(tx.outcome)  || 0;
+    } else {
+      b1Income  -= parseFloat(tx.income)  || 0;
+      b1Expense -= parseFloat(tx.outcome) || 0;
+    }
+  });
+  var b1VatCurrent = -vatCurQ;   // >0 = к возмещению; <0 = к уплате
   var b1PlannedBal = bankBal + b1Income - b1Expense - b1Loans + b1VatCurrent - b1VatPlan;
 
   // ── Итоговые строки ───────────────────────────────────────────────────────
