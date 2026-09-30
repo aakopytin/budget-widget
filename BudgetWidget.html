@@ -1517,6 +1517,15 @@ function calcB1Forecast(endDate) {
     if (VSIP_ACC_IDS[aid] || TT_ACC_IDS[aid])
       bankBal += (parseFloat(tx.income)||0) - (parseFloat(tx.outcome)||0);
   });
+  // Начальный остаток (fixed_balance из bank_account — не транзакция)
+  if (_bankAccounts) {
+    _bankAccounts.forEach(function(ba) {
+      var fb = parseFloat(ba.fixed_balance) || 0;
+      if (!fb || !ba.fixed_balance_date || ba.fixed_balance_date > endDate) return;
+      var baid = +ba.id;
+      if (VSIP_ACC_IDS[baid] || TT_ACC_IDS[baid]) bankBal += fb;
+    });
+  }
 
   // ── 2. Плановые суммы по проектам (из plan_money) ──────────────────────────
   // biPlan[pid]  — план доходов acct=36, date>=curMoStart, без займов/НДС/переводов
@@ -1640,7 +1649,7 @@ function calcB1Forecast(endDate) {
 //
 // Источники:
 //   opening2024  = bankBal(все txns до endDate) − net_txns_since_2024-01-01
-//   bankBal      = нетто всех txns на REAL_ACC до endDate (fixed_balance=0 в Aspro)
+//   bankBal      = нетто всех txns на REAL_ACC до endDate + fixed_balance из bank_account
 //   netProfit    = aggregate() / (revF−vatRevF) − (costF−vatCostF) − adminF − taxF
 //   vneprojNet   = расходы pid=35 без НДС (PLS cat=3157)
 //   finNet       = нетто займы/кредиты (cat: Получение/Выплата кредита/займа)
@@ -1683,10 +1692,8 @@ function buildCashTable(agg, txns, plsItems, catMap, endDate, bankAccounts, b1fc
   // REAL_ACC определена глобально (см. выше, рядом с VAT_CAT_IDS).
 
   // ── 1. Остаток на 01.01.2024 ─────────────────────────────────────────────
-  // bank_account.balance в Aspro не заполнен (fixed_balance=0 у всех счетов).
-  // Текущий остаток вычисляется как нетто всех транзакций на реальных счетах
-  // с начала истории до endDate. _txns уже содержит все транзакции без фильтра
-  // по дате (api/data.js не добавляет дату в GET-запрос).
+  // Текущий остаток = нетто всех транзакций на реальных счетах до endDate
+  // + fixed_balance из bank_account (начальный остаток, не транзакция).
   var bankBal = 0;
   txns.forEach(function (tx) {
     if (!tx.date || tx.date > endDate) return;
@@ -1694,7 +1701,16 @@ function buildCashTable(agg, txns, plsItems, catMap, endDate, bankAccounts, b1fc
       bankBal += (parseFloat(tx.income) || 0) - (parseFloat(tx.outcome) || 0);
     }
   });
+  // Начальный остаток (fixed_balance из bank_account — не транзакция)
+  if (bankAccounts) {
+    bankAccounts.forEach(function(ba) {
+      var fb = parseFloat(ba.fixed_balance) || 0;
+      if (!fb || !ba.fixed_balance_date || ba.fixed_balance_date > endDate) return;
+      if (REAL_ACC[+ba.id]) bankBal += fb;
+    });
+  }
   // Остаток на 01.01.2024 = текущий остаток − нетто-движение с 01.01.2024 по endDate
+  // (fixed_balance с датой до 2024-01-01 уже входит в bankBal и не входит в netSince2024)
   var netSince2024 = 0;
   txns.forEach(function (tx) {
     var dt = tx.date || '';
@@ -1703,6 +1719,15 @@ function buildCashTable(agg, txns, plsItems, catMap, endDate, bankAccounts, b1fc
       netSince2024 += (parseFloat(tx.income) || 0) - (parseFloat(tx.outcome) || 0);
     }
   });
+  // fixed_balance с датой >= 2024-01-01 — редкий случай, но учитываем
+  if (bankAccounts) {
+    bankAccounts.forEach(function(ba) {
+      var fb = parseFloat(ba.fixed_balance) || 0;
+      var fbd = ba.fixed_balance_date || '';
+      if (!fb || !fbd || fbd > endDate || fbd < '2024-01-01') return;
+      if (REAL_ACC[+ba.id]) netSince2024 += fb;
+    });
+  }
   var opening2024 = bankBal - netSince2024;
 
   // ── 2. Чистая прибыль за период (факт, без НДС) ──────────────────────────
