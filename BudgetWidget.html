@@ -1739,6 +1739,36 @@ function calcB1Forecast(endDate) {
                     + Math.round(ostByType.other * (_vfr.effRateOther||0));
   var vatPlan = -totIncVatProg + totExpVatProg + _vfr.vatAdj;
 
+  // ── DEBUG: компоненты vatPlan ─────────────────────────────────────────────
+  console.log('[VAT B2] totIncVatProg=' + totIncVatProg
+    + ' totExpVatProg=' + totExpVatProg
+    + ' vatAdj=' + _vfr.vatAdj
+    + ' vatPlan=' + vatPlan
+    + ' effRateOther=' + (_vfr.effRateOther||0).toFixed(6));
+  console.log('[VAT B2] ostByType mat=' + ostByType.mat + ' smr=' + ostByType.smr
+    + ' smrZ=' + ostByType.smrZ + ' other=' + ostByType.other);
+  // Доходы по пидам (top-10 by contribution)
+  var _incDbg = [];
+  Object.keys(_iset).forEach(function(p) {
+    if (SKIP_VAT_PIDS[+p]) return;
+    var bi = (biPlan[p]||0) + (biEb[p]||0);
+    if (!bi) return;
+    var ost = bi - (factCurI[p]||0);
+    if (Math.abs(ost) > 100) _incDbg.push({p:p, bi:bi, fi:factCurI[p]||0, ost:ost, vat:Math.round(ost*22/122)});
+  });
+  _incDbg.sort(function(a,b){return Math.abs(b.vat)-Math.abs(a.vat);});
+  console.log('[VAT B2] top income contributors:', JSON.stringify(_incDbg.slice(0,10)));
+  // Расходы 'other' по пидам
+  var _expDbg = [];
+  Object.keys(_eset).forEach(function(p) {
+    if (SKIP_VAT_PIDS[+p]) return;
+    var ost = ((bePlanByType[p]||{})['other']||0) + ((beEbByType[p]||{})['other']||0) - ((factCurByType[p]||{})['other']||0);
+    if (Math.abs(ost) > 100) _expDbg.push({p:p, ost:ost, vat:Math.round(ost*(_vfr.effRateOther||0))});
+  });
+  _expDbg.sort(function(a,b){return Math.abs(b.vat)-Math.abs(a.vat);});
+  console.log('[VAT B2] top other-expense contributors:', JSON.stringify(_expDbg.slice(0,10)));
+  // ─────────────────────────────────────────────────────────────────────────
+
   // ── 8. Итог ────────────────────────────────────────────────────────────────
   var plannedBal = bankBal + incOst - expOst + finOst + vatFact + vatPlan;
   var reserve    = -plannedBal;  // знак как в widget.html: reserve = -(sum)
