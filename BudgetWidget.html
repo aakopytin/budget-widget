@@ -1163,7 +1163,7 @@ function buildTable(agg, txns, plans, catMap, endDate, plsItems, b1fc) {
       var clr = v < 0 ? '#dc2626' : '#166534';
       var sgn = v < 0 ? '−' : '+';
       var w = bold ? 'font-weight:700;' : '';
-      return '<span style="color:' + clr + ';' + w + '">' + sgn + '\u202f' + s + '</span>';
+      return '<span style="color:' + clr + ';' + w + '">' + sgn + ' ' + s + '</span>';
     }
     function row2(label, v, opts) {
       opts = opts || {};
@@ -1188,7 +1188,7 @@ function buildTable(agg, txns, plans, catMap, endDate, plsItems, b1fc) {
     html += '</tbody></table></div>';
   }
 
-  html += buildCdaTable(agg.cdaByPid);
+    html += buildCdaTable(agg.cdaByPid);
   html += buildProchTable(agg.prochByPid);
   return html;
 }
@@ -1409,7 +1409,7 @@ function calcB1VatForecast(endDate) {
       if (item.type === 40) {  // расходы: эффективная ставка
         var t = _catType(catName);
         var r = (t && t !== 'zero') ? (effRates[t]||0) : 0;
-        if (OXR_W[+item.project_id] && _offSub(catName) === 'po') r = 0;
+        if (OXR_W[+item.project_id]) r = 0;  // офисные расходы: НДС не планируется
         tgt.vatOutPlan += Math.round(val * r);
       }
     } else {  // acct=150 (EB)
@@ -1514,9 +1514,11 @@ function calcB1VatForecast(endDate) {
   });
 
   return {
-    vatFact:    vfFactVatRes,
-    vatPlan:    vfItogoVatRes - vfFactVatRes,
-    vfEbExpAdj: ebActualGross - ebPlanGrossForPaid
+    vatFact:      vfFactVatRes,
+    vatPlan:      vfItogoVatRes - vfFactVatRes,
+    vfEbExpAdj:   ebActualGross - ebPlanGrossForPaid,
+    effRateOther: effRates['proj_other'] || 0,
+    vatAdj:       vatAdj
   };
 }
 
@@ -1539,6 +1541,19 @@ function calcB1Forecast(endDate) {
   var curYr = +endDate.slice(0,4), curMo = +endDate.slice(5,7);
   var curMoStart = endDate.slice(0,7) + '-01';
   function _p2(n) { return n < 10 ? '0' + n : '' + n; }
+
+  // Субтип затрат для расчёта НДС (как expSubType в widget.html)
+  var _ZERO_RC = {'Зарплата':1,'Налоги с зарплаты':1,'Командировки':1,'Страхование':1,
+                  'Налог на прибыль':1,'Налог на имущество':1,'Земельный налог':1,
+                  'Транспортный налог':1,'Страховые взносы':1};
+  function _expSubType2(n) {
+    var l = (n||'').toLowerCase();
+    if (l.indexOf('без ндс') >= 0) return 'smrZ';
+    if (_ZERO_RC[n]) return 'smrZ';
+    if (/^смр/.test(l)) return 'smr';
+    if (/^материал/.test(l)) return 'mat';
+    return 'other';
+  }
 
   // ── 0. VAT forecast (нужен до всего, т.к. даёт vfEbExpAdj для expOst) ───────
   var _vfr = calcB1VatForecast(endDate);
@@ -1566,9 +1581,12 @@ function calcB1Forecast(endDate) {
   // bePlan[pid]  — план расходов acct=36, аналогично
   // biEb[pid]    — внебюдж. лимит доходов acct=150, ВСЕ даты (без фильтра!)
   // beEb[pid]    — внебюдж. лимит расходов acct=150, аналогично
-  // planSkIn/Out — займы OXR/pid=35, acct=36, date>=curMoStart
+  // planSkIn/Out     — займы OXR/pid=35, acct=36, date>=curMoStart (будущий план)
+  // planSkInH/OutH  — займы OXR/pid=35, acct=36, date in прошлых месяцах тек.года (исторический hI/hE, как в widget.html)
   var biPlan = {}, bePlan = {}, biEb = {}, beEb = {};
+  var bePlanByTypeMap = {}, beEbByTypeMap = {};   // pid → {mat,smr,smrZ,other}
   var planSkIn = 0, planSkOut = 0;
+  var planSkInH = 0, planSkOutH = 0;  // hI/hE аналог из widget.html
 
   _plans.forEach(function(item) {
     var pid = +(item.project_id);
@@ -1586,18 +1604,26 @@ function calcB1Forecast(endDate) {
       if (!dt) return;
       // Займы OXR-проектов и pid=35 → в финансовую деятельность (planSk)
       if (LOAN_CN[cn] && (OXR_B1[pid] || pid === 35)) {
+        var janCurYr = curYr + '-01-01';
         if (dt >= curMoStart) {
-          if (isI) planSkIn  += val;
+          if (isI) planSkIn  += val;   // будущий план
           if (isE) planSkOut += val;
+        } else if (dt >= janCurYr) {
+          if (isI) planSkInH  += val;  // исторический план тек.года (hI в widget.html)
+          if (isE) planSkOutH += val;
         }
         return;
       }
       if (LOAN_CN[cn] || dt < curMoStart) return;
-      // Budget1 включает ВСЕ cat типа acc=36 в be_plan/bi_plan (кроме займов и переводов).
+      // Budget1 включает ВСЕ cat типа acc=36 в be_plan/bi_plan (кроме займов, переводов и Проц.к уплате).
       // VAT_CAT_IDS НЕ фильтруем — иначе плановые выплаты НДС (cat=3144) выпадают из expOst.
-      if (SKIP_CAT_NAMES[cn]) return;
+      if (SKIP_CAT_NAMES[cn] || cn === 'Проценты к уплате') return;  // идентично SKIP в widget.html
       if (isI) biPlan[pid] = (biPlan[pid]||0) + val;
-      if (isE) bePlan[pid] = (bePlan[pid]||0) + val;
+      if (isE) {
+        bePlan[pid] = (bePlan[pid]||0) + val;
+        if (!bePlanByTypeMap[pid]) bePlanByTypeMap[pid] = {mat:0,smr:0,smrZ:0,other:0};
+        bePlanByTypeMap[pid][_expSubType2(cn)] = (bePlanByTypeMap[pid][_expSubType2(cn)]||0) + val;
+      }
 
     } else {
       // acct=150: внебюджетный лимит — только текущий месяц и будущие
@@ -1606,7 +1632,11 @@ function calcB1Forecast(endDate) {
       var ebDt = item.plan_paid_date || '';
       if (ebDt && ebDt < curMoStart) return;  // skip past EB plans
       if (isI) biEb[pid] = (biEb[pid]||0) + val;
-      if (isE) beEb[pid] = (beEb[pid]||0) + val;
+      if (isE) {
+        beEb[pid] = (beEb[pid]||0) + val;
+        if (!beEbByTypeMap[pid]) beEbByTypeMap[pid] = {mat:0,smr:0,smrZ:0,other:0};
+        beEbByTypeMap[pid][_expSubType2(cn)] = (beEbByTypeMap[pid][_expSubType2(cn)]||0) + val;
+      }
     }
   });
 
@@ -1615,6 +1645,7 @@ function calcB1Forecast(endDate) {
   // factCurE[pid] — расходы !SKIP !LOAN !VAT, REAL_ACC, curMoStart..endDate
   // factSkIn/Out  — займы/кредиты, ВСЕ счета (как в Бюджет1: fin.skIn.fCur без REAL_ACC)
   var factCurI = {}, factCurE = {};
+  var factCurByTypeMap = {};  // pid → {mat,smr,smrZ,other}
   var factSkIn = 0, factSkOut = 0;
 
   _txns.forEach(function(tx) {
@@ -1631,13 +1662,18 @@ function calcB1Forecast(endDate) {
 
     // Остальные — только REAL_ACC
     if (!REAL_ACC[+tx.org_account_id]) return;
-    if (SKIP_CAT_NAMES[cn] || VAT_CAT_IDS[cid]) return;
+    // Исключаем те же категории, что в SKIP widget.html (Проценты к уплате → fin.int, не в eCur)
+    if (SKIP_CAT_NAMES[cn] || VAT_CAT_IDS[cid] || cn === 'Проценты к уплате') return;
 
     var pid = +(tx.project_id);
     if (!VALID_PID[pid]) return;
 
     if (inc && INC_CAT_NAMES[cn])  factCurI[pid] = (factCurI[pid]||0) + inc;
-    if (out && !INC_CAT_NAMES[cn]) factCurE[pid] = (factCurE[pid]||0) + out;
+    if (out && !INC_CAT_NAMES[cn]) {
+      factCurE[pid] = (factCurE[pid]||0) + out;
+      if (!factCurByTypeMap[pid]) factCurByTypeMap[pid] = {mat:0,smr:0,smrZ:0,other:0};
+      factCurByTypeMap[pid][_expSubType2(cn)] = (factCurByTypeMap[pid][_expSubType2(cn)]||0) + out;
+    }
   });
 
   // ── 4. incOst: Σ по pid с планом > 0 ───────────────────────────────────────
@@ -1661,21 +1697,57 @@ function calcB1Forecast(endDate) {
   });
   expOst += _vfr.vfEbExpAdj;  // поправка для оплаченных ВБ-расходов (как в widget.html)
 
-  // ── 6. finOst = skInO − skOutO ─────────────────────────────────────────────
-  var skInO  = planSkIn  > 0 ? planSkIn  - factSkIn  : 0;
-  var skOutO = planSkOut > 0 ? planSkOut - factSkOut : 0;
+  // ── 6. finOst = skInO − skOutO (идентично widget.html: hI + skInPS − fCur) ───
+  // hI  = planSkInH  (исторический план тек.года), skInPS = planSkIn (будущий план)
+  // fCur = factSkIn  (текущий месяц, уже отфильтровано по curMoStart..endDate выше)
+  var skInO  = (planSkInH + planSkIn === 0 || (!planSkInH && !planSkIn)) ? 0
+             : planSkInH + planSkIn - factSkIn;
+  var skOutO = (planSkOutH + planSkOut === 0 || (!planSkOutH && !planSkOut)) ? 0
+             : planSkOutH + planSkOut - factSkOut;
   var finOst = skInO - skOutO;  // <0 = чистые погашения займов
 
-  // ── 7. НДС — из calcB1VatForecast (точная реплика calcVatForecast Бюджет1) ─
-  var vatFact = _vfr.vatFact;   // ≡ _vF в widget.html
-  var vatPlan = _vfr.vatPlan;   // ≡ _vP в widget.html
+  // ── 7. НДС ─────────────────────────────────────────────────────────────────
+  // vatFact — из calcB1VatForecast (факт кварталa)
+  // vatPlan — реплика buildVatForecastTable2: Σ(ostByType × ставка) по проектам
+  var vatFact = _vfr.vatFact;
+  var _eor = _vfr.effRateOther;  // effRates['proj_other']
+
+  // Доходная часть: Σ остаток дохода × 22/122
+  var totIncVatProg = 0;
+  Object.keys(_iset).forEach(function(p) {
+    var bi = (biPlan[p]||0) + (biEb[p]||0);
+    if (bi > 0) totIncVatProg += Math.round((bi - (factCurI[p]||0)) * 22/122);
+  });
+
+  // Расходная часть: Σ ostByType × rate (как projOstByType2 × rate в Бюджет1)
+  var totExpVatProg = 0;
+  Object.keys(_eset).forEach(function(p) {
+    var pid = +p;
+    var bePT  = bePlanByTypeMap[pid] || {};
+    var beEbT = beEbByTypeMap[pid]   || {};
+    var fcT   = factCurByTypeMap[pid]|| {};
+    var matOst = (bePT.mat  ||0) + (beEbT.mat  ||0) - (fcT.mat  ||0);
+    var smrOst = (bePT.smr  ||0) + (beEbT.smr  ||0) - (fcT.smr  ||0);
+    var othOst = (bePT.other||0) + (beEbT.other||0) - (fcT.other||0);
+    // smrZ: нулевая ставка
+    totExpVatProg += Math.round(matOst * 22/122);
+    totExpVatProg += Math.round(smrOst * 5/105);
+    totExpVatProg += Math.round(othOst * _eor);
+  });
+
+  var vatPlan = -totIncVatProg + totExpVatProg + _vfr.vatAdj;
 
   // ── 8. Итог ────────────────────────────────────────────────────────────────
   var plannedBal = bankBal + incOst - expOst + finOst + vatFact + vatPlan;
+  var reserve    = -plannedBal;  // знак как в widget.html: reserve = -(sum)
+  var _ed = endDate || '';
+  var dateStr = _ed.length >= 10
+    ? _ed.slice(8,10) + '.' + _ed.slice(5,7) + '.' + _ed.slice(0,4)
+    : _ed;
 
   return { bankBal: bankBal, incOst: incOst, expOst: expOst,
            finOst: finOst, vatFact: vatFact, vatPlan: vatPlan,
-           plannedBal: plannedBal };
+           plannedBal: plannedBal, reserve: reserve, dateStr: dateStr };
 }
 
 // ── КЭШ ДАННЫХ ───────────────────────────────────────────────────────────────
