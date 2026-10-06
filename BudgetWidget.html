@@ -1744,6 +1744,36 @@ function calcB1Forecast(endDate) {
                     + Math.round(ostByType.other * (_vfr.effRateOther||0));
   var vatPlan = -totIncVatProg + totExpVatProg + _vfr.vatAdj;
 
+  // ── DEBUG: per-pid income breakdown ──────────────────────────────────────
+  (function() {
+    var rows = [];
+    Object.keys(_iset).forEach(function(p) {
+      if (SKIP_VAT_PIDS[+p]) return;
+      var bp = biPlan[p]||0, bpnv = biPlanNoVat[p]||0, be = biEb[p]||0, fi = factCurI[p]||0;
+      if (!bp && !be) return;
+      rows.push({p:+p, bp:bp, bpnv:bpnv, be:be, fi:fi, ost:bpnv+be-fi, vat:Math.round((bpnv+be-fi)*22/122)});
+    });
+    rows.sort(function(a,b){return b.ost-a.ost;});
+    console.log('[VAT B2 v4] totIncVatProg='+totIncVatProg+' (target=29302242)');
+    console.log('[VAT B2 v4] per-pid (sorted by ost):',JSON.stringify(rows));
+    // Категории доходного плана для pid=1 (top contributor)
+    var cat1 = {}, yr1 = {};
+    _plans.forEach(function(item) {
+      if (+(item.project_id) !== 1) return;
+      if (+(item.org_account_id) !== 36) return;
+      if (item.type !== 30) return;
+      var dt = (item.plan_paid_date||'');
+      var yr = dt.slice(0,4);
+      var cn = (_cats&&_cats[+(item.category_id)])||('cat'+item.category_id);
+      var val = parseFloat(item.total)||0;
+      cat1[cn] = (cat1[cn]||0)+val;
+      yr1[yr] = (yr1[yr]||0)+val;
+    });
+    console.log('[VAT B2 v4] pid=1 acc=36 income by year:', JSON.stringify(yr1));
+    console.log('[VAT B2 v4] pid=1 acc=36 income by cat:', JSON.stringify(cat1));
+  })();
+  // ── END DEBUG ──────────────────────────────────────────────────────────────
+
   // ── 8. Итог ────────────────────────────────────────────────────────────────
   var plannedBal = bankBal + incOst - expOst + finOst + vatFact + vatPlan;
   var reserve    = -plannedBal;  // знак как в widget.html: reserve = -(sum)
