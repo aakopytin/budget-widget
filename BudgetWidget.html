@@ -1831,7 +1831,10 @@ function calcB1VatPlanB(endDate, vatAdj) {
     var r = (planTot > 0 && vatTot > 0) ? Math.min(vatTot/planTot, 22/122) : defOth;
     totExp += Math.round(ost * r);
   });
-  return -totInc + totExp + (vatAdj || 0);
+  // _sumOst('exp') из Бюджет1: Σ по группам PROJECTS (вкл. Офис и Внепроектные)
+  var sumOstExp = 0;
+  PROJECTS.forEach(function(p) { sumOstExp += projOst2(p, 'exp'); });
+  return { vatPlan: -totInc + totExp + (vatAdj || 0), sumOstExp: sumOstExp };
 }
 
 // ── РАСЧЁТ ПРОГНОЗА ДС (Б1) — точная реплика _sumOst + cashBal + НДС ─────────
@@ -2011,15 +2014,12 @@ function calcB1Forecast(endDate) {
   });
 
   // ── 5. expOst: Σ по pid с планом > 0 + поправка ВБ (vfEbExpAdj) ──────────
-  var expOst = 0;
   var _eset = {};
   Object.keys(bePlan).forEach(function(p){_eset[p]=1;});
   Object.keys(beEb).forEach(function(p){_eset[p]=1;});
-  Object.keys(_eset).forEach(function(p) {
-    var be = (bePlan[p]||0) + (beEb[p]||0);
-    if (be > 0) expOst += be - (factCurE[p]||0);
-  });
-  expOst += _vfr.vfEbExpAdj;  // поправка для оплаченных ВБ-расходов (как в widget.html)
+  // Дословно как в Бюджет1: _expOst = _sumOst('exp') + vfEbExpAdj (группировка проектов, факт и план — из порта)
+  var _b1port = calcB1VatPlanB(endDate, _vfr.vatAdj);
+  var expOst = _b1port.sumOstExp + _vfr.vfEbExpAdj;
 
   // ── 6. finOst = skInO − skOutO (идентично widget.html: hI + skInPS − fCur) ───
   // hI  = planSkInH  (план текущего месяца), skInPS = planSkIn (план следующих месяцев)
@@ -2072,7 +2072,7 @@ function calcB1Forecast(endDate) {
                     + Math.round(ostByType.smr * 5/105)
                     + Math.round(ostByType.other * (_vfr.effRateOther||0));
   // Итоговое значение — дословный порт buildVatForecastTable2 (Бюджет1)
-  var vatPlan = calcB1VatPlanB(endDate, _vfr.vatAdj);
+  var vatPlan = _b1port.vatPlan;
 
 
   // ── 8. Итог ────────────────────────────────────────────────────────────────
