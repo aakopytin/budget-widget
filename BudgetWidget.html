@@ -1897,8 +1897,8 @@ function calcB1Forecast(endDate) {
   // bePlan[pid]  — план расходов acct=36, аналогично
   // biEb[pid]    — внебюдж. лимит доходов acct=150, ВСЕ даты (без фильтра!)
   // beEb[pid]    — внебюдж. лимит расходов acct=150, аналогично
-  // planSkIn/Out     — займы OXR/pid=35, acct=36, date>=curMoStart (будущий план)
-  // planSkInH/OutH  — займы OXR/pid=35, acct=36, date in прошлых месяцах тек.года (исторический hI/hE, как в widget.html)
+  // planSkIn/Out     — займы OXR/pid=35, acct=36, месяцы ПОСЛЕ текущего (skInPS в Бюджет1)
+  // planSkInH/OutH  — займы OXR/pid=35, acct=36, ТЕКУЩИЙ месяц (hI/hE в Бюджет1)
   var biPlan = {}, bePlan = {}, biEb = {}, beEb = {};
   var biPlanNoVat = {};  // biPlan без VAT-категорий (cat=3147/3158) — аналог zeroIncCats в calcVatForecast
   var bePlanByType = {}, beEbByType = {}, factCurByType = {};
@@ -1921,13 +1921,14 @@ function calcB1Forecast(endDate) {
       if (!dt) return;
       // Займы OXR-проектов и pid=35 → в финансовую деятельность (planSk)
       if (LOAN_CN[cn] && (OXR_B1[pid] || pid === 35)) {
-        var janCurYr = curYr + '-01-01';
-        if (dt >= curMoStart) {
-          if (isI) planSkIn  += val;   // будущий план
-          if (isE) planSkOut += val;
-        } else if (dt >= janCurYr) {
-          if (isI) planSkInH  += val;  // исторический план тек.года (hI в widget.html)
+        // Как в Бюджет1: hI/hE = план ТЕКУЩЕГО месяца, plan[] = все месяцы после текущего
+        var nextMoStart = curMo === 12 ? (curYr + 1) + '-01-01' : curYr + '-' + _p2(curMo + 1) + '-01';
+        if (dt >= curMoStart && dt < nextMoStart) {
+          if (isI) planSkInH  += val;  // hI — текущий месяц
           if (isE) planSkOutH += val;
+        } else if (dt >= nextMoStart) {
+          if (isI) planSkIn  += val;   // skInPS — будущие месяцы
+          if (isE) planSkOut += val;
         }
         return;
       }
@@ -1979,8 +1980,8 @@ function calcB1Forecast(endDate) {
     var out = parseFloat(tx.outcome) || 0;
 
     // Займы → factSk (все счета, без фильтра REAL_ACC — как в Бюджет1)
-    if (cn === 'Получение кредита' || cn === 'Получение займа') { if (inc) factSkIn  += inc; return; }
-    if (cn === 'Выплата кредита'   || cn === 'Выплата займа')   { if (out) factSkOut += out; return; }
+    if (cn === 'Получение кредита' || cn === 'Получение займа') { if (inc > 0) factSkIn  += inc; return; }
+    if (cn === 'Выплата кредита'   || cn === 'Выплата займа')   { if (out > 0) factSkOut += out; return; }
 
     // Остальные — только REAL_ACC
     if (!REAL_ACC[+tx.org_account_id]) return;
@@ -2021,12 +2022,28 @@ function calcB1Forecast(endDate) {
   expOst += _vfr.vfEbExpAdj;  // поправка для оплаченных ВБ-расходов (как в widget.html)
 
   // ── 6. finOst = skInO − skOutO (идентично widget.html: hI + skInPS − fCur) ───
-  // hI  = planSkInH  (исторический план тек.года), skInPS = planSkIn (будущий план)
+  // hI  = planSkInH  (план текущего месяца), skInPS = planSkIn (план следующих месяцев)
   // fCur = factSkIn  (текущий месяц, уже отфильтровано по curMoStart..endDate выше)
-  var skInO  = (planSkInH + planSkIn === 0 || (!planSkInH && !planSkIn)) ? 0
-             : planSkInH + planSkIn - factSkIn;
-  var skOutO = (planSkOutH + planSkOut === 0 || (!planSkOutH && !planSkOut)) ? 0
-             : planSkOutH + planSkOut - factSkOut;
+  // Факт займов прошлого и текущего года (f25/f26) — для проверки _skInB === 0, как в Бюджет1
+  var skF25In = 0, skF26In = 0, skF25Out = 0, skF26Out = 0;
+  _txns.forEach(function(tx) {
+    var dt = tx.date || '';
+    var yr = +dt.slice(0,4) || 0;
+    if (yr !== curYr && yr !== curYr - 1) return;
+    if (yr === curYr && dt > endDate) return;
+    var cn = (_cats && _cats[+tx.category_id]) || '';
+    var inc = parseFloat(tx.income) || 0, out = parseFloat(tx.outcome) || 0;
+    if ((cn === 'Получение кредита' || cn === 'Получение займа') && inc > 0) {
+      if (yr === curYr) skF26In += inc; else skF25In += inc;
+    }
+    if ((cn === 'Выплата кредита' || cn === 'Выплата займа') && out > 0) {
+      if (yr === curYr) skF26Out += out; else skF25Out += out;
+    }
+  });
+  var skInB  = skF25In  + (skF26In  - factSkIn)  + planSkInH  + planSkIn;
+  var skOutB = skF25Out + (skF26Out - factSkOut) + planSkOutH + planSkOut;
+  var skInO  = (skInB  === 0 || (!planSkInH  && !planSkIn))  ? 0 : skInB  - (skF25In  + skF26In);
+  var skOutO = (skOutB === 0 || (!planSkOutH && !planSkOut)) ? 0 : skOutB - (skF25Out + skF26Out);
   var finOst = skInO - skOutO;  // <0 = чистые погашения займов
 
   // ── 7. НДС — Method B: остаток плана × фиксированная ставка (buildVatForecastTable2) ─
