@@ -1203,7 +1203,7 @@ function setStatus(msg) {
 //
 // Возвращает {vatFact, vatPlan, vfEbExpAdj} — используется в calcB1Forecast.
 //
-// vatFact  = vfFactVatRes  = -(НДС начисл.клиентам) + (НДС к вычету, факт)  + vatAdj
+// vatFact  = vfFactVatRes  = -(НДС начисл.клиентам) + (НДС к вычету, факт)  [без vatAdj]
 // vatPlan  = vfItogoVatRes - vfFactVatRes = вклад будущих плановых месяцев
 // vfEbExpAdj = поправка expOst для оплаченных ВБ-позиций
 //
@@ -1384,7 +1384,7 @@ function calcB1VatForecast(endDate) {
     paidPmIds[pmId] = true;
     paidPmAmts[pmId] = (paidPmAmts[pmId]||0) + (parseFloat(tx.income)||0);
   });
-  var zeroIncCats = {'Прочий доход':1,'Проценты к получению':1,'Получение займов':1};
+  var zeroIncCats = {'Прочий доход':1,'Проценты к получению':1,'Получение займов':1,'Налог - НДС':1,'Налоги - НДС':1};
 
   _plans.forEach(function(item) {
     var acc = +item.org_account_id;
@@ -1459,16 +1459,14 @@ function calcB1VatForecast(endDate) {
   dal.vatIn = dal.vatInPlan; dal.vatOut = dal.vatOutPlan;
 
   // ── vatAdj: project_id=36, org_account_id=149 (Корректировки НДС) ──────────
-  var qStartYM = curYr*100 + q0m, qEndM = q0m+2, qEndY = curYr;
-  while (qEndM > 12) { qEndM -= 12; qEndY++; }
-  var qEndYM = qEndY*100 + qEndM;
+  var qStartYM = curYr*100 + q0m;
   var vatAdjInc = 0, vatAdjExp = 0;
   _plans.forEach(function(item) {
     if (+item.project_id !== 36) return;   // project_id=36 (Корректировки НДС)
     var dt = item.plan_paid_date || '';
     if (dt.length < 7) return;
     var pYM = +dt.slice(0,4)*100 + +dt.slice(5,7);
-    if (pYM < qStartYM || pYM > qEndYM) return;
+    if (pYM < qStartYM) return;
     if (item.type === 30) vatAdjInc += parseFloat(item.total)||0;
     if (item.type === 40) vatAdjExp += parseFloat(item.total)||0;
   });
@@ -1482,7 +1480,7 @@ function calcB1VatForecast(endDate) {
   });
   vfTVI += dal.vatIn; vfTVO += dal.vatOut;
 
-  var vfFactVatRes  = -vfFVI + vfFVO + vatAdj;
+  var vfFactVatRes  = -vfFVI + vfFVO;            // НЕ включает vatAdj
   var vfItogoVatRes = -vfTVI + vfTVO + vatAdj;
 
   // ── vfEbExpAdj: поправка expOst для оплаченных ВБ-расходов ─────────────────
@@ -1594,7 +1592,9 @@ function calcB1Forecast(endDate) {
         return;
       }
       if (LOAN_CN[cn] || dt < curMoStart) return;
-      if (SKIP_CAT_NAMES[cn] || VAT_CAT_IDS[cid]) return;
+      // Budget1 включает ВСЕ cat типа acc=36 в be_plan/bi_plan (кроме займов и переводов).
+      // VAT_CAT_IDS НЕ фильтруем — иначе плановые выплаты НДС (cat=3144) выпадают из expOst.
+      if (SKIP_CAT_NAMES[cn]) return;
       if (isI) biPlan[pid] = (biPlan[pid]||0) + val;
       if (isE) bePlan[pid] = (bePlan[pid]||0) + val;
 
