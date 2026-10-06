@@ -1534,6 +1534,8 @@ function calcB1VatForecast(endDate) {
 function calcB1Forecast(endDate) {
   var LOAN_CN = {'Получение займа':1,'Выплата займа':1,'Получение кредита':1,'Выплата кредита':1};
   var OXR_B1  = {24:1, 26:1};  // офисные проекты (финансовая деятельность в Бюджет1)
+  // Проекты, исключаемые из VAT-прогноза (аналог buildVatForecastTable2: 'Офис' + 'Внепроектные')
+  var SKIP_VAT_PIDS = {24:1, 26:1, 35:1};
 
   // Классификация категории в 4 бакета (реплика expSubType из widget.html)
   var _ZERO_RC = {
@@ -1712,10 +1714,10 @@ function calcB1Forecast(endDate) {
 
   // ── 7. НДС — Method B: остаток плана × фиксированная ставка (buildVatForecastTable2) ─
   var vatFact = _vfr.vatFact;
-  // Доходы: projOst × 22/122 для non-office пидов с планом > 0
+  // Доходы: projOst × 22/122 — исключаем Офис(24/26) + Внепроектные(35)
   var totIncVatProg = 0;
   Object.keys(_iset).forEach(function(p) {
-    if (OXR_B1[+p]) return;
+    if (SKIP_VAT_PIDS[+p]) return;
     var bi = (biPlan[p]||0) + (biEb[p]||0);
     if (!bi) return;
     var ost = bi - (factCurI[p]||0);
@@ -1725,7 +1727,7 @@ function calcB1Forecast(endDate) {
   var SUBTYPES_V = ['mat','smr','smrZ','other'];
   var ostByType = {mat:0,smr:0,smrZ:0,other:0};
   Object.keys(_eset).forEach(function(p) {
-    if (OXR_B1[+p]) return;
+    if (SKIP_VAT_PIDS[+p]) return;
     SUBTYPES_V.forEach(function(s) {
       var ost = ((bePlanByType[p]||{})[s]||0) + ((beEbByType[p]||{})[s]||0)
                 - ((factCurByType[p]||{})[s]||0);
