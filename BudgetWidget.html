@@ -465,6 +465,7 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
       }
       if (item.type === 40 && !ADMIN_EXCL_IDS[item.category_id]) {
         var cid5 = item.category_id;
+        if (VAT_CAT_IDS[cid5]) return;  // НДС учитывается отдельно в НДС-разделе
         if      (ADMIN_FOT_IDS[cid5])  adminFotP  += val;
         else if (ADMIN_TRIP_IDS[cid5]) adminTripP += val;
         else if (ADMIN_BUH_IDS[cid5])  adminBuhP  += val;
