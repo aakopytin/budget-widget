@@ -1588,6 +1588,7 @@ function calcB1Forecast(endDate) {
   // planSkIn/Out     — займы OXR/pid=35, acct=36, date>=curMoStart (будущий план)
   // planSkInH/OutH  — займы OXR/pid=35, acct=36, date in прошлых месяцах тек.года (исторический hI/hE, как в widget.html)
   var biPlan = {}, bePlan = {}, biEb = {}, beEb = {};
+  var biPlanNoVat = {};  // biPlan без VAT-категорий (cat=3147/3158) — аналог zeroIncCats в calcVatForecast
   var bePlanByType = {}, beEbByType = {}, factCurByType = {};
   var planSkIn = 0, planSkOut = 0;
   var planSkInH = 0, planSkOutH = 0;  // hI/hE аналог из widget.html
@@ -1622,7 +1623,11 @@ function calcB1Forecast(endDate) {
       // Budget1 включает ВСЕ cat типа acc=36 в be_plan/bi_plan (кроме займов, переводов и Проц.к уплате).
       // VAT_CAT_IDS НЕ фильтруем — иначе плановые выплаты НДС (cat=3144) выпадают из expOst.
       if (SKIP_CAT_NAMES[cn] || cn === 'Проценты к уплате') return;  // идентично SKIP в widget.html
-      if (isI) biPlan[pid] = (biPlan[pid]||0) + val;
+      if (isI) {
+        biPlan[pid] = (biPlan[pid]||0) + val;
+        // Аналог zeroIncCats в calcVatForecast: исключаем VAT-категории из прогноза НДС
+        if (!VAT_CAT_IDS[cid]) biPlanNoVat[pid] = (biPlanNoVat[pid]||0) + val;
+      }
       if (isE) {
         bePlan[pid] = (bePlan[pid]||0) + val;
         var _stp = _expSubType(cn);
@@ -1718,7 +1723,7 @@ function calcB1Forecast(endDate) {
   var totIncVatProg = 0;
   Object.keys(_iset).forEach(function(p) {
     if (SKIP_VAT_PIDS[+p]) return;
-    var bi = (biPlan[p]||0) + (biEb[p]||0);
+    var bi = (biPlanNoVat[p]||0) + (biEb[p]||0);  // без VAT-категорий (аналог zeroIncCats)
     if (!bi) return;
     var ost = bi - (factCurI[p]||0);
     totIncVatProg += Math.round(ost * 22/122);
@@ -1738,36 +1743,6 @@ function calcB1Forecast(endDate) {
                     + Math.round(ostByType.smr * 5/105)
                     + Math.round(ostByType.other * (_vfr.effRateOther||0));
   var vatPlan = -totIncVatProg + totExpVatProg + _vfr.vatAdj;
-
-  // ── DEBUG: компоненты vatPlan ─────────────────────────────────────────────
-  console.log('[VAT B2] totIncVatProg=' + totIncVatProg
-    + ' totExpVatProg=' + totExpVatProg
-    + ' vatAdj=' + _vfr.vatAdj
-    + ' vatPlan=' + vatPlan
-    + ' effRateOther=' + (_vfr.effRateOther||0).toFixed(6));
-  console.log('[VAT B2] ostByType mat=' + ostByType.mat + ' smr=' + ostByType.smr
-    + ' smrZ=' + ostByType.smrZ + ' other=' + ostByType.other);
-  // Доходы по пидам (top-10 by contribution)
-  var _incDbg = [];
-  Object.keys(_iset).forEach(function(p) {
-    if (SKIP_VAT_PIDS[+p]) return;
-    var bi = (biPlan[p]||0) + (biEb[p]||0);
-    if (!bi) return;
-    var ost = bi - (factCurI[p]||0);
-    if (Math.abs(ost) > 100) _incDbg.push({p:p, bi:bi, fi:factCurI[p]||0, ost:ost, vat:Math.round(ost*22/122)});
-  });
-  _incDbg.sort(function(a,b){return Math.abs(b.vat)-Math.abs(a.vat);});
-  console.log('[VAT B2] top income contributors:', JSON.stringify(_incDbg.slice(0,10)));
-  // Расходы 'other' по пидам
-  var _expDbg = [];
-  Object.keys(_eset).forEach(function(p) {
-    if (SKIP_VAT_PIDS[+p]) return;
-    var ost = ((bePlanByType[p]||{})['other']||0) + ((beEbByType[p]||{})['other']||0) - ((factCurByType[p]||{})['other']||0);
-    if (Math.abs(ost) > 100) _expDbg.push({p:p, ost:ost, vat:Math.round(ost*(_vfr.effRateOther||0))});
-  });
-  _expDbg.sort(function(a,b){return Math.abs(b.vat)-Math.abs(a.vat);});
-  console.log('[VAT B2] top other-expense contributors:', JSON.stringify(_expDbg.slice(0,10)));
-  // ─────────────────────────────────────────────────────────────────────────
 
   // ── 8. Итог ────────────────────────────────────────────────────────────────
   var plannedBal = bankBal + incOst - expOst + finOst + vatFact + vatPlan;
