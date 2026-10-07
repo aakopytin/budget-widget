@@ -1832,9 +1832,15 @@ function calcB1VatPlanB(endDate, vatAdj) {
     totExp += Math.round(ost * r);
   });
   // _sumOst('exp') из Бюджет1: Σ по группам PROJECTS (вкл. Офис и Внепроектные)
-  var sumOstExp = 0;
-  PROJECTS.forEach(function(p) { sumOstExp += projOst2(p, 'exp'); });
-  return { vatPlan: -totInc + totExp + (vatAdj || 0), sumOstExp: sumOstExp };
+  var sumOstExp = 0, sumOstIncNoEP = 0;
+  PROJECTS.forEach(function(p) {
+    sumOstExp += projOst2(p, 'exp');
+    if (p !== EP) sumOstIncNoEP += projOst2(p, 'inc');
+  });
+  // Как в Бюджет1: доходы — без внепроектных; внепроектные доходы уменьшают расходы (нетто)
+  var epIncOst = projOst2(EP, 'inc');
+  return { vatPlan: -totInc + totExp + (vatAdj || 0), sumOstExp: sumOstExp,
+           sumOstIncNoEP: sumOstIncNoEP, epIncOst: epIncOst };
 }
 
 // ── РАСЧЁТ ПРОГНОЗА ДС (Б1) — точная реплика _sumOst + cashBal + НДС ─────────
@@ -1882,7 +1888,8 @@ function calcB1Forecast(endDate) {
   _txns.forEach(function(tx) {
     if (!tx.date || tx.date > endDate) return;
     var aid = +tx.org_account_id;
-    if (VSIP_ACC_IDS[aid] || TT_ACC_IDS[aid])
+    // + счета компании «ВСИП Прочие» (211, 212) — как в остатке ДС Бюджет1
+    if (VSIP_ACC_IDS[aid] || TT_ACC_IDS[aid] || aid === 211 || aid === 212)
       bankBal += (parseFloat(tx.income)||0) - (parseFloat(tx.outcome)||0);
   });
   // Начальный остаток (fixed_balance из bank_account — не транзакция)
@@ -1891,7 +1898,7 @@ function calcB1Forecast(endDate) {
       var fb = parseFloat(ba.fixed_balance) || 0;
       if (!fb || !ba.fixed_balance_date || ba.fixed_balance_date > endDate) return;
       var baid = +ba.id;
-      if (VSIP_ACC_IDS[baid] || TT_ACC_IDS[baid]) bankBal += fb;
+      if (VSIP_ACC_IDS[baid] || TT_ACC_IDS[baid] || baid === 211 || baid === 212) bankBal += fb;
     });
   }
 
@@ -2003,23 +2010,19 @@ function calcB1Forecast(endDate) {
     }
   });
 
-  // ── 4. incOst: Σ по pid с планом > 0 ───────────────────────────────────────
-  var incOst = 0;
+  // ── 4. incOst — дословно как в Бюджет1: _sumOst('inc') без внепроектных доходов ─
+  var _b1port = calcB1VatPlanB(endDate, _vfr.vatAdj);
+  var incOst = _b1port.sumOstIncNoEP;
   var _iset = {};
   Object.keys(biPlan).forEach(function(p){_iset[p]=1;});
   Object.keys(biEb).forEach(function(p){_iset[p]=1;});
-  Object.keys(_iset).forEach(function(p) {
-    var bi = (biPlan[p]||0) + (biEb[p]||0);
-    if (bi > 0) incOst += bi - (factCurI[p]||0);
-  });
 
   // ── 5. expOst: Σ по pid с планом > 0 + поправка ВБ (vfEbExpAdj) ──────────
   var _eset = {};
   Object.keys(bePlan).forEach(function(p){_eset[p]=1;});
   Object.keys(beEb).forEach(function(p){_eset[p]=1;});
-  // Дословно как в Бюджет1: _expOst = _sumOst('exp') + vfEbExpAdj (группировка проектов, факт и план — из порта)
-  var _b1port = calcB1VatPlanB(endDate, _vfr.vatAdj);
-  var expOst = _b1port.sumOstExp + _vfr.vfEbExpAdj;
+  // Дословно как в Бюджет1: _expOst = _sumOst('exp') − внепроектные доходы + vfEbExpAdj
+  var expOst = _b1port.sumOstExp - _b1port.epIncOst + _vfr.vfEbExpAdj;
 
   // ── 6. finOst = skInO − skOutO (идентично widget.html: hI + skInPS − fCur) ───
   // hI  = planSkInH  (план текущего месяца), skInPS = planSkIn (план следующих месяцев)
