@@ -1181,10 +1181,10 @@ function buildTable(agg, txns, plans, catMap, endDate, plsItems, b1fc) {
     html += row2('Текущий остаток ДС',     b1fc.bankBal);
     html += row2('Ожидаемые приходы',      b1fc.incOst);
     html += row2('Ожидаемые расходы',     -b1fc.expOst);
-    html += row2('Ожидаемые займы',        b1fc.finOst);
+    html += row2('Выплата/Получение займов', b1fc.finOst);
     html += row2('Ожидаемый текущий НДС',  b1fc.vatFact);
     html += row2('Ожидаемый плановый НДС', b1fc.vatPlan);
-    html += row2('Плановый остаток ДС',    b1fc.plannedBal, { bold: true, bg: BG_T2 });
+    html += row2('Резерв выплат по завершенным проектам', b1fc.plannedBal, { bold: true, bg: BG_T2 });
     html += '</tbody></table></div>';
   }
 
