@@ -1829,6 +1829,7 @@ function calcB1VatPlanB(endDate, vatAdj) {
     var planTot = SUBTYPES.reduce(function(s,k){ return s + (d.bePlanByType[k]||0); }, 0);
     var vatTot  = SUBTYPES.reduce(function(s,k){ return s + (pb[k]||0); }, 0);
     var r = (planTot > 0 && vatTot > 0) ? Math.min(vatTot/planTot, 22/122) : defOth;
+    if (g === OFF) r = 0;  // как в Бюджет1: плановый НДС по офисным расходам = 0
     totExp += Math.round(ost * r);
   });
   // _sumOst('exp') из Бюджет1: Σ по группам PROJECTS (вкл. Офис и Внепроектные)
