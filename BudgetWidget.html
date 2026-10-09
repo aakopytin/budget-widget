@@ -280,6 +280,7 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
   var adminBuhP=0, adminBuhF=0;
   var adminIntP=0, adminIntF=0;
   var adminOthP=0, adminOthF=0;
+  var adminOthNames = {};  // названия категорий, попавших в «Админ · Прочие» (вкл. Бухгалтерию)
   var prochByPid = {};
   function getProchPP(pid) {
     var k = (pid || 0) + '';
@@ -346,9 +347,9 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
         var cid4 = tx.category_id;
         if      (ADMIN_FOT_IDS[cid4])  { adminFotF  += expAmt; if (isPast) adminFotP  += expAmt; }
         else if (ADMIN_TRIP_IDS[cid4]) { adminTripF += expAmt; if (isPast) adminTripP += expAmt; }
-        else if (ADMIN_BUH_IDS[cid4])  { adminBuhF  += expAmt; if (isPast) adminBuhP  += expAmt; }
+        else if (ADMIN_BUH_IDS[cid4])  { adminBuhF  += expAmt; if (isPast) adminBuhP  += expAmt; if (catName) adminOthNames[catName] = 1; }
         else if (ADMIN_INT_IDS[cid4])  { adminIntF  += expAmt; if (isPast) adminIntP  += expAmt; }
-        else                           { adminOthF  += expAmt; if (isPast) adminOthP  += expAmt; }
+        else                           { adminOthF  += expAmt; if (isPast) adminOthP  += expAmt; if (catName) adminOthNames[catName] = 1; }
       }
       return;
     }
@@ -469,9 +470,9 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
         if (VAT_CAT_IDS[cid5]) return;  // НДС учитывается отдельно в НДС-разделе
         if      (ADMIN_FOT_IDS[cid5])  adminFotP  += val;
         else if (ADMIN_TRIP_IDS[cid5]) adminTripP += val;
-        else if (ADMIN_BUH_IDS[cid5])  adminBuhP  += val;
+        else if (ADMIN_BUH_IDS[cid5])  { adminBuhP  += val; if (catName) adminOthNames[catName] = 1; }
         else if (ADMIN_INT_IDS[cid5])  adminIntP  += val;
-        else                           adminOthP  += val;
+        else                           { adminOthP  += val; if (catName) adminOthNames[catName] = 1; }
       }
       return;
     }
@@ -524,7 +525,8 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
     adminP: adminFotP+adminTripP+adminBuhP+adminIntP+adminOthP,
     adminF: adminFotF+adminTripF+adminBuhF+adminIntF+adminOthF,
     prochByPid: prochByPid,
-    cdaByPid: cdaByPid
+    cdaByPid: cdaByPid,
+    adminOthNames: Object.keys(adminOthNames).sort(function(a, b) { return a.localeCompare(b, 'ru'); })
   };
 }
 
@@ -920,6 +922,24 @@ function buildTable(agg, txns, plans, catMap, endDate, plsItems, b1fc) {
   netProfP = vsub(profitP, taxP);
   netProfF = vsub(profitF, taxF);
 
+  // ─── Самопроверка: Всего = Σ колонок проектов; План = Факт + Остаток ─────
+  (function() {
+    function sumProj(a) { var t = 0; for (var i = 1; i < a.length; i++) t += a[i]; return t; }
+    var chk = {
+      'Выручка с НДС (план)': agg.revP, 'Выручка с НДС (факт)': agg.revF,
+      'Себестоимость с НДС (план)': agg.costP, 'Себестоимость с НДС (факт)': agg.costF,
+      'Наценка с НДС (план)': markGrossP, 'Наценка с НДС (факт)': markGrossF
+    };
+    Object.keys(chk).forEach(function(k) {
+      var d = chk[k][0] - sumProj(chk[k]);
+      if (Math.abs(d) > 1) console.warn('[Бюджет2 проверка] ' + k + ': Всего ≠ Σ проектов, разница ' + Math.round(d));
+    });
+    var admSubP = agg.adminFotP + agg.adminTripP + agg.adminIntP + kreditP_ + agg.adminOthP + agg.adminBuhP;
+    if (Math.abs((agg.adminP + kreditP_) - admSubP) > 1) console.warn('[Бюджет2 проверка] Админ (план): Всего ≠ Σ разбивки');
+    if (Math.abs(vatPlan - (vatFact + vatRemainder)) > 1) console.warn('[Бюджет2 проверка] НДС: План ≠ Факт + Остаток');
+    if (Math.abs(markNetPlanAdj - (markNetFactAdj + markNetOst)) > 1) console.warn('[Бюджет2 проверка] Наценка без НДС: План ≠ Факт + Остаток');
+  })();
+
   // ─── HTML-хелперы ─────────────────────────────────────────────────────────
   var CS = 'padding:5px 8px;border-bottom:2px solid #3d5c7a;font-size:10px;' +
            'font-weight:600;white-space:nowrap;background:#f0f4f9;color:#374151;';
@@ -970,7 +990,7 @@ function buildTable(agg, txns, plans, catMap, endDate, plsItems, b1fc) {
     // Строка «план»
     html += '<tr>';
     html += tdL('<span style="' + labelStyle + '">' + label + '</span>', bg1,
-                'border-top:' + (opts.borderTop || '1px solid #f0f0f0'));
+                'border-top:' + (opts.borderTop || '1px solid #f0f0f0') + ';white-space:normal;text-align:left;line-height:1.25');
     html += tdL('<span style="font-size:10px;color:#6b7280">план (бюджет)</span>', bg1);
     if (totalOnly) {
       html += tdV(fmtK(pVals[0], true), bg1, 'font-weight:600');
@@ -1053,7 +1073,7 @@ function buildTable(agg, txns, plans, catMap, endDate, plsItems, b1fc) {
 
     // Строка «план» — с меткой «Админ²» и итогом в Всего
     html += '<tr>';
-    html += labelCell(bg1, '<span style="' + lbl + '">Админ²</span>', bTop);
+    html += labelCell(bg1, '<span style="' + lbl + '">Админ</span>', bTop);
     html += labelCell(bg1, '<span style="font-size:10px;color:#6b7280">план (бюджет)</span>', bTop);
     html += cell(bg1, fmtK(totalP, true), bTop + 'font-weight:600');
     for (var i = 0; i < nProj; i++) {
@@ -1097,7 +1117,7 @@ function buildTable(agg, txns, plans, catMap, endDate, plsItems, b1fc) {
   }
   var html = '<table style="border-collapse:collapse;font-size:10.5px;table-layout:fixed">';
   html += '<thead><tr>';
-  html += th('Показатель', 'left',  '140px');
+  html += th('Показатель', 'left',  '120px');
   html += th('&nbsp;',     'left',  '72px');
   html += th('Всего',      'right', PROJ_COL_W);
   PROJ_COLS.forEach(function (c) { html += thProj(c.name); });
@@ -1121,8 +1141,9 @@ function buildTable(agg, txns, plans, catMap, endDate, plsItems, b1fc) {
   html += gap();
 
   // Наценка без НДС с учётом входящего остатка
-  html += section('Наценка без НДС с учётом входящего остатка', markNetPAdj, markNetFAdj,
-                  { italic: true, color: '#1e40af' });
+  var _fbR = String(Math.round(FIXED_BAL)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+  html += section('Наценка без НДС<br>с учётом входящего<br>остатка (' + _fbR + ' рублей)', markNetPAdj, markNetFAdj,
+                  { italic: true, color: '#1e40af', totalOnly: true });
 
   html += gap();
 
@@ -1143,12 +1164,12 @@ function buildTable(agg, txns, plans, catMap, endDate, plsItems, b1fc) {
 
   html += '</tbody></table>';
 
-  // Сноски
+  // Подпись под таблицей
   html += '<div style="margin-top:8px;font-size:10px;color:#9ca3af;line-height:1.6">';
-  html += '<strong>план (бюджет)</strong> = факт прошлых месяцев + plan_money текущего/будущих — ';
-  html += 'совпадает с колонкой «Бюджет» виджета Бюджет.<br>';
-  html += '² <em>Админ</em> = расходы проектов 24 (ВСИП Админ) и 26 (ТТ Общие); без НДС и Налога на прибыль. Разбивка: ФОТ+Налоги на ФОТ (кат. 9–11), Командировки (7), Бухгалтерия (17), Проценты к уплате (1008), Прочие — остаток.';
+  html += '<strong>Админ · Прочие</strong>: ' + ((agg.adminOthNames && agg.adminOthNames.length) ? agg.adminOthNames.join(', ') : '—') + '.<br>';
+  html += '<strong>Наценка без НДС</strong> = Наценка с НДС − НДС + Начальный остаток (аванс).';
   html += '</div>';
+
 
 
   // ── Прогноз ДС (Бюджет1) ─────────────────────────────────────────────────
