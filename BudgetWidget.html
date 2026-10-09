@@ -994,7 +994,14 @@ function buildTable(agg, txns, plans, catMap, endDate, plsItems, b1fc) {
     html += tdL('<span style="font-size:10px;color:#6b7280">план (бюджет)</span>', bg1);
     if (totalOnly) {
       html += tdV(fmtK(pVals[0], true), bg1, 'font-weight:600');
-      html += projCells(bg1);
+      if (opts.note) {
+        // Примечание справа от «Всего» — одна ячейка на все колонки проектов и все три строки
+        html += '<td colspan="' + nProj + '" rowspan="3" style="padding:4px 10px;vertical-align:middle;' +
+                'white-space:normal;text-align:left;font-size:10px;line-height:1.5;color:#6b7280;' +
+                'background:#fff;border-bottom:2px solid #e5e7eb;border-left:1px solid #e5e7eb">' + opts.note + '</td>';
+      } else {
+        html += projCells(bg1);
+      }
     } else {
       pVals.forEach(function (v, i) {
         html += tdV(fmtK(v, i === 0), bg1, i === 0 ? 'font-weight:600' : '');
@@ -1008,7 +1015,7 @@ function buildTable(agg, txns, plans, catMap, endDate, plsItems, b1fc) {
     html += tdL('<span style="font-size:10px;color:#6b7280">факт</span>', bg2);
     if (totalOnly) {
       html += tdV(fmtK(fVals[0], true), bg2, 'font-weight:600');
-      html += projCells(bg2);
+      if (!opts.note) html += projCells(bg2);
     } else {
       fVals.forEach(function (v, i) {
         html += tdV(fmtK(v, i === 0), bg2, i === 0 ? 'font-weight:600' : '');
@@ -1022,7 +1029,7 @@ function buildTable(agg, txns, plans, catMap, endDate, plsItems, b1fc) {
     html += tdL('<span style="font-size:10px;color:#6b7280">остаток</span>', bg3, bot3);
     if (totalOnly) {
       html += tdV(fmtOst(oVals[0], true), bg3, bot3 + 'font-weight:600');
-      html += projCells(bg3, bot3);
+      if (!opts.note) html += projCells(bg3, bot3);
     } else {
       oVals.forEach(function (v, i) {
         html += tdV(fmtOst(v, i === 0), bg3,
@@ -1142,8 +1149,10 @@ function buildTable(agg, txns, plans, catMap, endDate, plsItems, b1fc) {
 
   // Наценка без НДС с учётом входящего остатка
   var _fbR = String(Math.round(FIXED_BAL)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
-  html += section('Наценка без НДС<br>с учётом входящего<br>остатка (' + _fbR + ' рублей)', markNetPAdj, markNetFAdj,
-                  { italic: true, color: '#1e40af', totalOnly: true });
+  html += section('Наценка без НДС', markNetPAdj, markNetFAdj,
+                  { italic: true, color: '#1e40af', totalOnly: true,
+                    note: 'Наценка без НДС считается с учётом входящего остатка (' + _fbR + ' рублей).<br>' +
+                          'Наценка без НДС = Наценка с НДС − НДС + Начальный остаток (аванс).' });
 
   html += gap();
 
@@ -1166,8 +1175,7 @@ function buildTable(agg, txns, plans, catMap, endDate, plsItems, b1fc) {
 
   // Подпись под таблицей
   html += '<div style="margin-top:8px;font-size:10px;color:#9ca3af;line-height:1.6">';
-  html += '<strong>Админ · Прочие</strong>: ' + ((agg.adminOthNames && agg.adminOthNames.length) ? agg.adminOthNames.join(', ') : '—') + '.<br>';
-  html += '<strong>Наценка без НДС</strong> = Наценка с НДС − НДС + Начальный остаток (аванс).';
+  html += '<strong>Админ · Прочие</strong>: Аренда, Бухгалтерия, Интернет и связь, Оборудование, Прочее, Расходы на услуги банков (комиссии).';
   html += '</div>';
 
 
