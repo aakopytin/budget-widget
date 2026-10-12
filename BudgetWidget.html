@@ -1378,10 +1378,20 @@ function calcB1VatForecast(endDate) {
   var pmDateMap = {};
   _plans.forEach(function(pm) { if (pm.id && pm.plan_paid_date) pmDateMap[pm.id] = pm.plan_paid_date; });
 
+  // Период PLS (как в Бюджет1): plan_paid_date планового платежа, иначе дата PLS.
+  // Если план — до начала текущего квартала, а оплата (дата PLS) — в текущем, период = дата PLS.
+  var _qStartStr = curYr + '-' + (q0m < 10 ? '0' + q0m : '' + q0m) + '-01';
+  function plsPeriodDate(p) {
+    var pd = (p.plan_money_id && pmDateMap[p.plan_money_id]) || '';
+    var ad = p.date || '';
+    if (pd && pd < _qStartStr && ad >= _qStartStr) return ad;
+    return pd || ad;
+  }
+
   // ── Шаг 4a: vatInFact из PLS cat=3147 (НДС начисленный клиентам) ───────────
   _pls.forEach(function(p) {
     if (+p.category_id !== 3147 || +p.project_id === TR_PID) return;
-    var periodDt = (p.plan_money_id && pmDateMap[p.plan_money_id]) || (p.date || '');
+    var periodDt = plsPeriodDate(p);
     if (periodDt.length < 7) return;
     var pYM = +periodDt.slice(0,4)*100 + +periodDt.slice(5,7);
     for (var ci = 0; ci < 9; ci++) {
@@ -1396,7 +1406,7 @@ function calcB1VatForecast(endDate) {
   // ── Шаг 4b: vatOutFact из PLS cat=3144 (НДС к вычету), с фильтрами ─────────
   _pls.forEach(function(p) {
     if (+p.category_id !== 3144 || +p.project_id === TR_PID) return;
-    var periodDt = (p.plan_money_id && pmDateMap[p.plan_money_id]) || (p.date || '');
+    var periodDt = plsPeriodDate(p);
     if (periodDt.length < 7) return;
     var pYM = +periodDt.slice(0,4)*100 + +periodDt.slice(5,7);
     var pDate = p.date || '';
@@ -1768,9 +1778,18 @@ function calcB1VatPlanB(endDate, vatAdj) {
     var o = parseFloat(tx.outcome) || 0;
     if (o) taxTxKey[(tx.date||'') + ':' + o] = 1;
   });
+  // Период PLS (как в Бюджет1): plan_paid_date планового платежа, иначе дата PLS.
+  // Если план — до начала текущего квартала, а оплата (дата PLS) — в текущем, период = дата PLS.
+  var _qStartStr = curYear + '-' + (q0m < 10 ? '0' + q0m : '' + q0m) + '-01';
+  function plsPeriodDate2(p) {
+    var pd = (p.plan_money_id && pmDateMap[p.plan_money_id]) || '';
+    var ad = p.date || '';
+    if (pd && pd < _qStartStr && ad >= _qStartStr) return ad;
+    return pd || ad;
+  }
   _pls.forEach(function(p) {
     if (+p.category_id !== 3144 || +p.project_id === TR_PID) return;
-    var pd = (p.plan_money_id && pmDateMap[p.plan_money_id]) || (p.date || '');
+    var pd = plsPeriodDate2(p);
     if (pd.length < 7) return;
     var ym = ymOf(pd), pn = PID_MAP[+p.project_id] || 'Прочие проекты ИКП';
     for (var ci = 0; ci < 9; ci++) {
