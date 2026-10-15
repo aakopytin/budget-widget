@@ -1509,16 +1509,20 @@ function calcB1VatForecast(endDate) {
   dal.vatIn = dal.vatInPlan; dal.vatOut = dal.vatOutPlan;
 
   // ── vatAdj: project_id=36, org_account_id=149 (Корректировки НДС) ──────────
-  var qStartYM = curYr*100 + q0m;
-  var vatAdjInc = 0, vatAdjExp = 0;
+  // Как в Бюджет1: дата корректировки в текущем квартале → текущий НДС (vatAdjCur),
+  // после текущего квартала → плановый НДС (vatAdjFut).
+  var qStartYM = curYr*100 + q0m, qEndYM = curYr*100 + q0m + 2;
+  var vatAdjInc = 0, vatAdjExp = 0, vatAdjCur = 0, vatAdjFut = 0;
   _plans.forEach(function(item) {
     if (+item.project_id !== 36) return;   // project_id=36 (Корректировки НДС)
     var dt = item.plan_paid_date || '';
     if (dt.length < 7) return;
     var pYM = +dt.slice(0,4)*100 + +dt.slice(5,7);
     if (pYM < qStartYM) return;
+    var aV = (parseFloat(item.total)||0) * (item.type === 30 ? 1 : item.type === 40 ? -1 : 0);
     if (item.type === 30) vatAdjInc += parseFloat(item.total)||0;
     if (item.type === 40) vatAdjExp += parseFloat(item.total)||0;
+    if (pYM <= qEndYM) vatAdjCur += aV; else vatAdjFut += aV;
   });
   var vatAdj = vatAdjInc - vatAdjExp;
 
@@ -1530,7 +1534,7 @@ function calcB1VatForecast(endDate) {
   });
   vfTVI += dal.vatIn; vfTVO += dal.vatOut;
 
-  var vfFactVatRes  = -vfFVI + vfFVO;            // НЕ включает vatAdj
+  var vfFactVatRes  = -vfFVI + vfFVO + vatAdjCur;  // корректировки текущего квартала — в текущий НДС
   var vfItogoVatRes = -vfTVI + vfTVO + vatAdj;
 
   // ── vfEbExpAdj: поправка expOst для оплаченных ВБ-расходов ─────────────────
@@ -1567,7 +1571,9 @@ function calcB1VatForecast(endDate) {
     vatPlan:      vfItogoVatRes - vfFactVatRes,
     vfEbExpAdj:   ebActualGross - ebPlanGrossForPaid,
     effRateOther: effRates['proj_other'] || 0,
-    vatAdj:       vatAdj
+    vatAdj:       vatAdj,
+    vatAdjCur:    vatAdjCur,
+    vatAdjFut:    vatAdjFut
   };
 }
 
@@ -2070,7 +2076,7 @@ function calcB1Forecast(endDate) {
   });
 
   // ── 4. incOst — дословно как в Бюджет1: _sumOst('inc') без внепроектных доходов ─
-  var _b1port = calcB1VatPlanB(endDate, _vfr.vatAdj);
+  var _b1port = calcB1VatPlanB(endDate, _vfr.vatAdjFut);  // только корректировки после тек. квартала
   var incOst = _b1port.sumOstIncNoEP;
   var _iset = {};
   Object.keys(biPlan).forEach(function(p){_iset[p]=1;});
