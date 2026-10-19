@@ -2223,8 +2223,19 @@ var CHP_LOAN_ROWS = [
   { key: 'apt',  label: 'Кредит АПТ (Аквант Прогрессивные Технологии) + %', crm: {1044: 1} },
   { key: 'don',  label: 'Кредит Донской В.М.',                              crm: {363: 1} },
   { key: 'snab', label: 'Снабсервис (аванс, остаток к выплате)',             crm: {188: 1} },
-  { key: 'area', label: 'Новая площадь',                                    crm: {911: 1} }
+  { key: 'area', label: 'Новая площадь',                                    crm: {911: 1} },
+  { key: 'ttss', label: 'Займы ТТ ↔ ВСИП СС (обе стороны)',                  crm: {250: 1} }
 ];
+// Займы ТТ ↔ ВСИП СС: сторона ВСИП СС — проект 35, контрагент ТИМ-ТРЕЙД (250);
+// сторона ТТ — проекты «ТТ Общие» (26) и «Проект СМ» (28), только категории займов/кредитов
+// (как в Бюджет1: «Итого движение займов» учитывает займы по всем проектам).
+var CHP_TT_PIDS = {26: 1, 28: 1};
+var CHP_LOAN_CAT_NAMES = {'Получение кредита': 1, 'Выплата кредита': 1, 'Получение займа': 1, 'Выплата займа': 1};
+function chpRowOf(pid, crmId, catId, rowByCrm) {
+  if (+pid === CHP_PID) return rowByCrm[+crmId] || 'other';
+  if (CHP_TT_PIDS[+pid] && CHP_LOAN_CAT_NAMES[(_cats && _cats[+catId]) || '']) return 'ttss';
+  return null;
+}
 // Плановые платежи без контрагента, которые нужно отнести к строкам займов (id plan_money → строка).
 // Сейчас пусто: у всех плановых платежей займов в Аспро указан контрагент.
 var CHP_PLAN_ROW = {};
@@ -2244,23 +2255,25 @@ function calcChpTable(endDate) {
   CHP_LOAN_ROWS.concat([{ key: 'other' }]).forEach(function (r) { R[r.key] = { fact: 0, plan: 0 }; });
   var paidByPm = {};
   _txns.forEach(function (tx) {
-    if (+tx.project_id !== CHP_PID) return;
+    var row = chpRowOf(tx.project_id, tx.crm_account_id, tx.category_id, rowByCrm);
+    if (!row) return;
     var dt = tx.date || '';
     if (!dt || dt < START_DATE || dt > endDate) return;
     if (!REAL_ACC[+tx.org_account_id] || SKIP[+tx.category_id]) return;
     var inc = parseFloat(tx.income) || 0, out = parseFloat(tx.outcome) || 0;
-    R[rowByCrm[+tx.crm_account_id] || 'other'].fact += inc - out;
+    R[row].fact += inc - out;
     if (tx.plan_money_id) paidByPm[tx.plan_money_id] = (paidByPm[tx.plan_money_id] || 0) + inc + out;
   });
   _plans.forEach(function (it) {
-    if (+it.project_id !== CHP_PID) return;
+    var prow = chpRowOf(it.project_id, it.crm_company_id, it.category_id, rowByCrm);
+    if (!prow) return;
     if (+it.org_account_id !== 36 && +it.org_account_id !== 150) return;
     var dt = it.plan_paid_date || '';
     if (!dt || dt < curMonthStart || SKIP[+it.category_id]) return;
     var rest = (parseFloat(it.total) || 0) - (paidByPm[it.id] || 0);
     if (rest <= 0) return;
     var v = it.type === 30 ? rest : it.type === 40 ? -rest : 0;
-    var key = CHP_PLAN_ROW[it.id] || rowByCrm[+it.crm_company_id] || 'other';
+    var key = CHP_PLAN_ROW[it.id] || prow;
     R[key].plan += v;
   });
   var loans = { fact: 0, plan: 0 };
