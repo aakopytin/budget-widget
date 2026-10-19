@@ -1,6 +1,7 @@
 {
   "routes": [
-    { "src": "/api/data", "dest": "/api/data.js" },
-    { "src": "/(.*)",     "dest": "/api/serve.js" }
+    { "src": "/api/data",  "dest": "/api/data.js" },
+    { "src": "/contracts", "dest": "/api/contracts.js" },
+    { "src": "/(.*)",      "dest": "/api/serve.js" }
   ]
 }
