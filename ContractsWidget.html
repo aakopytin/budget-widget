@@ -64,6 +64,7 @@ body {
 .c-tbl th.grp{text-align:center;border-bottom:1px solid #e5e7eb}
 .c-tbl td{padding:3px 8px;text-align:right;border-bottom:1px solid #f0f0f0;white-space:nowrap}
 .c-tbl tr.dim td{color:#9ca3af}
+.c-tbl tr.sub td{font-weight:600;background:#f8fafc;border-top:1px solid #d1d5db}
 .c-tbl tr.tot td{font-weight:700;border-top:2px solid #9ca3af;background:#f8fafc}
 .ex{display:inline-block;width:40px;height:6px;background:#e5e7eb;border-radius:3px;margin-right:5px;vertical-align:middle;overflow:hidden}
 .ex-b{height:6px;background:#3b82f6}
@@ -2215,35 +2216,66 @@ function calcB1Forecast(endDate) {
            plannedBal: plannedBal, reserve: reserve, dateStr: dateStr };
 }
 
-// ── ЗАТРАТЫ ИЗ ЧИСТОЙ ПРИБЫЛИ: проект 35 «Прочие/Закрытые» (в Бюджет2 исключён из проектов) ──
-// Факт  = Σ(расход − поступление) по транзакциям проекта 35 на реальных счетах с 01.01.2024 по дату,
-//         без переводов между счетами и НДС-строк (1004/1007/3144/3147).
-// План  = факт прошлых месяцев + plan_money (Бюджетный/Внебюджетный лимит, 36/150) с текущего месяца:
-//         расход (type=40) со знаком «+», поступление (type=30) со знаком «−».
-// Положительное значение = затраты (уменьшают ЧП), отрицательное = деньги вернулись.
+// ── РАСХОДЫ ИЗ ЧИСТОЙ ПРИБЫЛИ: проект 35 «Прочие/Закрытые» (в Бюджет2 исключён из проектов) ──
 var CHP_PID = 35;
-function calcChpCosts(endDate) {
+// Строки займов: контрагент (crm) → строка. Знак: поступление «+», выплата «−».
+var CHP_LOAN_ROWS = [
+  { key: 'apt',  label: 'Кредит АПТ (Аквант Прогрессивные Технологии) + %', crm: {1044: 1} },
+  { key: 'don',  label: 'Кредит Донской В.М.',                              crm: {363: 1} },
+  { key: 'snab', label: 'Снабсервис (аванс, остаток к выплате)',             crm: {188: 1} },
+  { key: 'area', label: 'Новая площадь',                                    crm: {911: 1} }
+];
+// Плановые платежи без контрагента, которые нужно отнести к строкам займов (id plan_money → строка).
+// Сейчас пусто: у всех плановых платежей займов в Аспро указан контрагент.
+var CHP_PLAN_ROW = {};
+
+// Факт  = поступления − выплаты по транзакциям проекта 35 (реальные счета, с 01.01.2024 по дату),
+//         без переводов между счетами и НДС-строк.
+// План  = остаток плановых платежей (Бюджетный/Внебюджетный лимит, 36/150) с текущего месяца:
+//         сумма плана минус уже оплаченное по нему (транзакции с этим plan_money_id по дату).
+//         Поступление (type=30) «+», выплата (type=40) «−».
+// Итого = Факт + План.
+function calcChpTable(endDate) {
   var curMonthStart = endDate.slice(0, 7) + '-01';
   var SKIP = {1004: 1, 1007: 1, 3144: 1, 3147: 1};
-  var fact = 0, past = 0, fut = 0;
+  var rowByCrm = {};
+  CHP_LOAN_ROWS.forEach(function (r) { Object.keys(r.crm).forEach(function (c) { rowByCrm[+c] = r.key; }); });
+  var R = {};
+  CHP_LOAN_ROWS.concat([{ key: 'other' }]).forEach(function (r) { R[r.key] = { fact: 0, plan: 0 }; });
+  var paidByPm = {};
   _txns.forEach(function (tx) {
     if (+tx.project_id !== CHP_PID) return;
     var dt = tx.date || '';
     if (!dt || dt < START_DATE || dt > endDate) return;
     if (!REAL_ACC[+tx.org_account_id] || SKIP[+tx.category_id]) return;
-    var v = (parseFloat(tx.outcome) || 0) - (parseFloat(tx.income) || 0);
-    fact += v;
-    if (dt < curMonthStart) past += v;
+    var inc = parseFloat(tx.income) || 0, out = parseFloat(tx.outcome) || 0;
+    R[rowByCrm[+tx.crm_account_id] || 'other'].fact += inc - out;
+    if (tx.plan_money_id) paidByPm[tx.plan_money_id] = (paidByPm[tx.plan_money_id] || 0) + inc + out;
   });
   _plans.forEach(function (it) {
     if (+it.project_id !== CHP_PID) return;
     if (+it.org_account_id !== 36 && +it.org_account_id !== 150) return;
     var dt = it.plan_paid_date || '';
     if (!dt || dt < curMonthStart || SKIP[+it.category_id]) return;
-    var v = parseFloat(it.total) || 0;
-    if (it.type === 40) fut += v; else if (it.type === 30) fut -= v;
+    var rest = (parseFloat(it.total) || 0) - (paidByPm[it.id] || 0);
+    if (rest <= 0) return;
+    var v = it.type === 30 ? rest : it.type === 40 ? -rest : 0;
+    var key = CHP_PLAN_ROW[it.id] || rowByCrm[+it.crm_company_id] || 'other';
+    R[key].plan += v;
   });
-  return { plan: past + fut, fact: fact };
+  var loans = { fact: 0, plan: 0 };
+  CHP_LOAN_ROWS.forEach(function (r) { loans.fact += R[r.key].fact; loans.plan += R[r.key].plan; });
+  return {
+    rows: CHP_LOAN_ROWS.map(function (r) { return { label: r.label, fact: R[r.key].fact, plan: R[r.key].plan }; }),
+    loans: loans, other: R.other,
+    total: { fact: loans.fact + R.other.fact, plan: loans.plan + R.other.plan }
+  };
+}
+// Для водопада: «Затраты из ЧП» со знаком «расход +» (= −итог расшифровки).
+// Факт = −Факт таблицы; План = −Итого таблицы (Факт + остаток плана).
+function calcChpCosts(endDate) {
+  var t = calcChpTable(endDate);
+  return { fact: -t.total.fact, plan: -(t.total.fact + t.total.plan), table: t };
 }
 // Остатки ДС на дату: ТТ (TT_ACC_IDS) и «ВСИП Прочие» (ИП/СС, счета 211/212) — для разбивки ЧП остатка
 function calcIpTtBalance(endDate) {
@@ -2441,8 +2473,27 @@ function renderContracts(C, endDate) {
     + '<div class="c-note">С 01.01.2024 до конца 1 кв. 2027. Полоса — доля бюджета, уже потраченная. Израсходовано ' + pct(aF, aP) + ' из ' + f1(aP) + ' млн.</div>'
     + '<div class="ad-wrap">' + ad + '</div>';
 
+  // ── Расшифровка расходов из чистой прибыли ──────────────────────────────
+  if (C.chpTbl) {
+    var CT = C.chpTbl;
+    var crow = function (l, r, cls) {
+      var it = r.fact + r.plan;
+      var c = function (v) { return '<td style="color:' + (v < 0 ? RD : (v > 0 ? GR : GY)) + '">' + (Math.abs(v) < 5e4 ? '0,0' : sg(v)) + '</td>'; };
+      return '<tr' + (cls ? ' class="' + cls + '"' : '') + '><td style="text-align:left">' + l + '</td>' + c(r.fact) + c(r.plan) + c(it) + '</tr>';
+    };
+    var ct = '<table class="c-tbl"><thead><tr><th style="text-align:left">Статья</th><th>Факт</th><th>План</th><th>Итого</th></tr></thead><tbody>';
+    CT.rows.forEach(function (r) { ct += crow(r.label, r); });
+    ct += crow('ИТОГО займы', CT.loans, 'sub');
+    ct += crow('Внепроектные расходы (нетто)', CT.other);
+    ct += crow('ИТОГО РАСХОДЫ ИЗ ЧИСТОЙ ПРИБЫЛИ', CT.total, 'tot');
+    ct += '</tbody></table>';
+    h += '<div class="c-h2">Расходы из чистой прибыли</div>'
+      + '<div class="c-note">Проект «Прочие/Закрытые». Поступления со знаком «+», выплаты «−». Факт — по ' + dStr
+      + '; План — остаток плановых платежей с текущего месяца (за вычетом уже оплаченного); Итого = Факт + План.</div>' + ct;
+  }
+
   h += '<div class="c-src">Источник: Аспро Cloud, расчёт по алгоритму виджета Бюджет2 на ' + dStr + '. '
-    + '«Затраты из ЧП» — проект «Прочие/Закрытые» (id 35): факт ' + f1(chpF) + ', план ' + f1(chpP) + ' (план = факт прошлых месяцев + плановые платежи с текущего месяца). '
+    + '«Затраты из ЧП» — проект «Прочие/Закрытые» (id 35), см. таблицу «Расходы из чистой прибыли» (в водопаде со знаком расхода). '
     + 'ЧП остаток = Чистая прибыль − Затраты из ЧП; «ИП + ТТ» — остатки ДС на счетах ТТ и ВСИП Прочие (ИП/СС), «ВСИП» — остальная часть.</div>';
   return h;
 }
@@ -2469,7 +2520,7 @@ function render() {
     var b1fc = calcB1Forecast(endDate);
     buildTable(agg, _txns, _plans, _cats, endDate, _pls, b1fc);   // расчёт Бюджет2 → window.__C
     var _chp = calcChpCosts(endDate);
-    window.__C.chpP = _chp.plan; window.__C.chpF = _chp.fact;
+    window.__C.chpP = _chp.plan; window.__C.chpF = _chp.fact; window.__C.chpTbl = _chp.table;
     window.__C.ipttBal = calcIpTtBalance(endDate);
     document.getElementById('content').innerHTML = renderContracts(window.__C, endDate);
     var dt = endDate.split('-').reverse().join('.');
