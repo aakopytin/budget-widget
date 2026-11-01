@@ -2562,31 +2562,50 @@ function renderChanges(cur, prev, prevEnd, baseNote) {
   function f1(v) { var x = Math.round(v / 1e5) / 10; if (Math.abs(x) < 0.05) x = 0;
     var s = Math.abs(x).toFixed(1).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, ' '); return (x < 0 ? '−' : '') + s; }
   function sg(v) { var s = f1(v); return (v > 0 ? '+' : '') + s; }
-  function line(name, what, a, b) {
+  // Один фрагмент «что: ±Δ млн (было → стало)»
+  function part(what, a, b) {
     var d = b - a, clr = d > 0 ? '#15803d' : '#dc2626';
-    return '<li>' + name + (what ? ' — ' + what : '') + ': <b style="color:' + clr + '">' + sg(d) + ' млн</b> (' + f1(a) + ' → ' + f1(b) + ')</li>';
+    return what + ': <b style="color:' + clr + '">' + sg(d) + ' млн</b> (' + f1(a) + ' → ' + f1(b) + ')';
   }
   function big(a, b) { return Math.abs((b || 0) - (a || 0)) > CHG_THRESHOLD; }
   var g1 = '', g2 = '', g3 = '';
+  // ── По договорам: все изменения по проекту — одной строкой ──
   var names = {};
   Object.keys(cur.proj || {}).forEach(function (n) { names[n] = 1; });
   Object.keys(prev.proj || {}).forEach(function (n) { names[n] = 1; });
   Object.keys(names).forEach(function (n) {
     var a = prev.proj[n] || { rev: 0, cost: 0, mar: 0 }, b = cur.proj[n] || { rev: 0, cost: 0, mar: 0 };
-    if (big(a.rev, b.rev))   g1 += line(n, 'плановая выручка', a.rev, b.rev);
-    if (big(a.cost, b.cost)) g1 += line(n, 'плановые затраты', a.cost, b.cost);
-    if (big(a.mar, b.mar))   g1 += line(n, 'плановая маржа', a.mar, b.mar);
+    var ps = [];
+    if (big(a.mar, b.mar))   ps.push(part('плановая маржа', a.mar, b.mar));
+    if (big(a.rev, b.rev))   ps.push(part('плановая выручка', a.rev, b.rev));
+    if (big(a.cost, b.cost)) ps.push(part('плановые затраты', a.cost, b.cost));
+    if (ps.length) g1 += '<li>' + n + ' — ' + ps.join(', ') + '</li>';
   });
+  // ── Административные расходы: статьи + итог с основным источником изменения ──
+  var AT = 'Итого административные расходы';
   Object.keys(cur.admin || {}).forEach(function (k) {
+    if (k === AT) return;
     var a = (prev.admin || {})[k] || 0, b = cur.admin[k] || 0;
-    if (big(a, b)) g2 += line(k, 'бюджет', a, b);
+    if (big(a, b)) g2 += '<li>' + k + ' — ' + part('бюджет', a, b) + '</li>';
   });
+  var ta = (prev.admin || {})[AT] || 0, tb = (cur.admin || {})[AT] || 0;
+  if (big(ta, tb)) {
+    var dT = tb - ta, top = null, topD = 0;
+    Object.keys(cur.admin || {}).forEach(function (k) {   // статья с наибольшим изменением в ту же сторону
+      if (k === AT) return;
+      var d = (cur.admin[k] || 0) - ((prev.admin || {})[k] || 0);
+      if (d * dT > 0 && Math.abs(d) > Math.abs(topD)) { top = k; topD = d; }
+    });
+    g2 += '<li><b>' + AT + '</b> — ' + part('бюджет', ta, tb)
+      + (top ? '; основной вклад — ' + top + ' ' + sg(topD) + ' млн' : '') + '</li>';
+  }
+  // ── Расходы из чистой прибыли ──
   var ck = {};
   Object.keys(cur.chp || {}).forEach(function (k) { ck[k] = 1; });
   Object.keys(prev.chp || {}).forEach(function (k) { ck[k] = 1; });
   Object.keys(ck).forEach(function (k) {
     var a = (prev.chp || {})[k] || 0, b = (cur.chp || {})[k] || 0;
-    if (big(a, b)) g3 += line(k, 'итого', a, b);
+    if (big(a, b)) g3 += '<li>' + k + ' — ' + part('итого', a, b) + '</li>';
   });
   var dStr = prevEnd.split('-').reverse().join('.');
   var h = '<div class="c-note">Изменения плановых параметров свыше 1 млн ₽ по сравнению с отчётом на ' + dStr + '. ' + (baseNote || '') + '</div>';
