@@ -2311,7 +2311,8 @@ function calcIpTtBalance(endDate) {
 // ИСПОЛНЕНИЕ ДОГОВОРОВ — визуальный отчёт (по образцу PDF «Исполнение договоров»)
 // Все числа берутся из расчёта Бюджет2 (buildTable → window.__C), суммы в млн ₽.
 // ══════════════════════════════════════════════════════════════════════════
-function renderContracts(C, endDate) {
+function renderContracts(C, endDate, opts) {
+  opts = opts || {};
   var M = 1e6;
   function m(v) { return v / M; }
   function f1(v) {                      // млн, 1 знак, минус — «−»
@@ -2408,6 +2409,8 @@ function renderContracts(C, endDate) {
     }).join('');
     return '<div class="wf"><div class="wf-h">' + title + '</div>' + rows + '</div>';
   }
+  // ── Основные изменения за месяц (заполняется асинхронно: fillChanges) ──
+  if (opts.changesHtml) h += '<div class="c-sec">Основные изменения за месяц</div>' + opts.changesHtml;
   h += '<div class="c-sec">От наценки к остатку чистой прибыли</div>'
     + '<div class="c-note">Каждая строка — шаг: зелёный добавляет, красный вычитает, синие — промежуточные итоги. Слева план, справа факт на ' + dStr + '.</div>'
     + '<div class="wf-wrap">' + waterfall('ПЛАН', steps('p')) + waterfall('ФАКТ', steps('f')) + '</div>';
@@ -2511,6 +2514,100 @@ function renderContracts(C, endDate) {
   return h;
 }
 
+
+// ══════════════════════════════════════════════════════════════════════════
+// ОСНОВНЫЕ ИЗМЕНЕНИЯ ЗА МЕСЯЦ
+// Отчёт на последний день месяца, предшествующего дате отчёта, рассчитывается тем же ядром Бюджет2
+// по текущим данным Аспро и показывается внизу в раскрывающемся блоке.
+// Раздел «Основные изменения за месяц» сравнивает ключевые плановые параметры текущего отчёта с ним
+// и показывает изменения по модулю свыше 1 млн ₽.
+// ══════════════════════════════════════════════════════════════════════════
+var CHG_THRESHOLD = 1e6;
+function contractsKeyParams(C) {
+  var P = { proj: {}, admin: {}, chp: {} };
+  (C.cols || []).forEach(function (n, i) {
+    var j = i + 1, r = C.revP[j] || 0, c = C.costP[j] || 0;
+    if (!r && !c) return;
+    P.proj[n] = { rev: r, cost: c, mar: r - c };
+  });
+  var a = C.admin || {};
+  P.admin = { 'ЗП + налоги': a.fotP || 0, 'Офис': a.officeP || 0, 'Кредит СС/ВСИП + %': a.creditP || 0, 'Командировки': a.tripP || 0 };
+  P.admin['Итого административные расходы'] = (a.fotP || 0) + (a.officeP || 0) + (a.creditP || 0) + (a.tripP || 0);
+  var T = C.chpTbl;
+  if (T) {
+    T.rows.forEach(function (r) { P.chp[r.label] = r.fact + r.plan; });
+    P.chp['ИТОГО займы'] = T.loans.fact + T.loans.plan;
+    P.chp['Внепроектные расходы (нетто)'] = T.other.fact + T.other.plan;
+    P.chp['ИТОГО расходы из чистой прибыли'] = T.total.fact + T.total.plan;
+  }
+  return P;
+}
+// Полный расчёт отчёта на дату (ядро Бюджет2 + расходы из ЧП + остатки ИП/ТТ) → объект C
+function calcContractsC(endDate) {
+  var agg = aggregate(_plans, _txns, _pls, _cats, endDate);
+  var b1fc = calcB1Forecast(endDate);
+  buildTable(agg, _txns, _plans, _cats, endDate, _pls, b1fc);   // → window.__C
+  var C = window.__C;
+  var chp = calcChpCosts(endDate);
+  C.chpP = chp.plan; C.chpF = chp.fact; C.chpTbl = chp.table;
+  C.ipttBal = calcIpTtBalance(endDate);
+  return C;
+}
+function _chgPrevMonthEnd(endDate) {
+  var y = +endDate.slice(0, 4), m = +endDate.slice(5, 7);
+  var d = new Date(y, m - 1, 0);   // последний день предыдущего месяца
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+function renderChanges(cur, prev, prevEnd, baseNote) {
+  function f1(v) { var x = Math.round(v / 1e5) / 10; if (Math.abs(x) < 0.05) x = 0;
+    var s = Math.abs(x).toFixed(1).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, ' '); return (x < 0 ? '−' : '') + s; }
+  function sg(v) { var s = f1(v); return (v > 0 ? '+' : '') + s; }
+  function line(name, what, a, b) {
+    var d = b - a, clr = d > 0 ? '#15803d' : '#dc2626';
+    return '<li>' + name + (what ? ' — ' + what : '') + ': <b style="color:' + clr + '">' + sg(d) + ' млн</b> (' + f1(a) + ' → ' + f1(b) + ')</li>';
+  }
+  function big(a, b) { return Math.abs((b || 0) - (a || 0)) > CHG_THRESHOLD; }
+  var g1 = '', g2 = '', g3 = '';
+  var names = {};
+  Object.keys(cur.proj || {}).forEach(function (n) { names[n] = 1; });
+  Object.keys(prev.proj || {}).forEach(function (n) { names[n] = 1; });
+  Object.keys(names).forEach(function (n) {
+    var a = prev.proj[n] || { rev: 0, cost: 0, mar: 0 }, b = cur.proj[n] || { rev: 0, cost: 0, mar: 0 };
+    if (big(a.rev, b.rev))   g1 += line(n, 'плановая выручка', a.rev, b.rev);
+    if (big(a.cost, b.cost)) g1 += line(n, 'плановые затраты', a.cost, b.cost);
+    if (big(a.mar, b.mar))   g1 += line(n, 'плановая маржа', a.mar, b.mar);
+  });
+  Object.keys(cur.admin || {}).forEach(function (k) {
+    var a = (prev.admin || {})[k] || 0, b = cur.admin[k] || 0;
+    if (big(a, b)) g2 += line(k, 'бюджет', a, b);
+  });
+  var ck = {};
+  Object.keys(cur.chp || {}).forEach(function (k) { ck[k] = 1; });
+  Object.keys(prev.chp || {}).forEach(function (k) { ck[k] = 1; });
+  Object.keys(ck).forEach(function (k) {
+    var a = (prev.chp || {})[k] || 0, b = (cur.chp || {})[k] || 0;
+    if (big(a, b)) g3 += line(k, 'итого', a, b);
+  });
+  var dStr = prevEnd.split('-').reverse().join('.');
+  var h = '<div class="c-note">Изменения плановых параметров свыше 1 млн ₽ по сравнению с отчётом на ' + dStr + '. ' + (baseNote || '') + '</div>';
+  if (!g1 && !g2 && !g3) return h + '<div style="font-size:12px;color:#374151">Изменений свыше 1 млн ₽ нет.</div>';
+  var ul = function (t, x) { return x ? '<div class="c-h2">' + t + '</div><ul style="margin:2px 0 6px 18px;padding:0;font-size:12px;line-height:1.6;color:#374151">' + x + '</ul>' : ''; };
+  return h + ul('По договорам', g1) + ul('Административные расходы', g2)
+    + ul('Расходы из чистой прибыли (поступления «+», выплаты «−»)', g3);
+}
+// Отчёт на дату + изменения к концу прошлого месяца + раскрывающийся отчёт на конец прошлого месяца
+function renderContractsWithPrev(endDate) {
+  var prevEnd = _chgPrevMonthEnd(endDate);
+  var prevC = calcContractsC(prevEnd);
+  var curC = calcContractsC(endDate);
+  var chg = renderChanges(contractsKeyParams(curC), contractsKeyParams(prevC), prevEnd, '');
+  var pStr = prevEnd.split('-').reverse().join('.');
+  return renderContracts(curC, endDate, { changesHtml: chg })
+    + '<details style="margin-top:18px;border-top:2px solid #e5e7eb;padding-top:6px">'
+    + '<summary style="cursor:pointer;font-size:13px;font-weight:700;color:#374151">Отчёт на ' + pStr + ' (конец прошлого месяца)</summary>'
+    + '<div style="margin-top:8px">' + renderContracts(prevC, prevEnd) + '</div></details>';
+}
+
 // ── КЭШ ДАННЫХ ───────────────────────────────────────────────────────────────
 
 var _cats = null, _plans = null, _txns = null, _pls = null, _bankAccounts = null;
@@ -2529,13 +2626,7 @@ function render() {
   var endDate = getEndDate();
   setStatus('&#9679; расчёт...');
   try {
-    var agg  = aggregate(_plans, _txns, _pls, _cats, endDate);
-    var b1fc = calcB1Forecast(endDate);
-    buildTable(agg, _txns, _plans, _cats, endDate, _pls, b1fc);   // расчёт Бюджет2 → window.__C
-    var _chp = calcChpCosts(endDate);
-    window.__C.chpP = _chp.plan; window.__C.chpF = _chp.fact; window.__C.chpTbl = _chp.table;
-    window.__C.ipttBal = calcIpTtBalance(endDate);
-    document.getElementById('content').innerHTML = renderContracts(window.__C, endDate);
+    document.getElementById('content').innerHTML = renderContractsWithPrev(endDate);   // расчёт Бюджет2 на дату и на конец прошлого месяца
     var dt = endDate.split('-').reverse().join('.');
     setStatus('&#9679; данные на ' + dt);
   } catch (e) {
