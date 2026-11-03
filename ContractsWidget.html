@@ -256,25 +256,31 @@ function planRevVatRate() {
 
 // ── API ───────────────────────────────────────────────────────────────────────
 
+// Загрузка «пачками»: /api/data?chunk=N — до 15 страниц Аспро (1500 записей) за один запрос.
+// При ошибке сервера (502/504) пачка запрашивается повторно (до 2 повторов). Ответы кешируются CDN на 2 минуты.
 function fetchAll(entity) {
-  var all = [], page = 1;
+  var all = [], chunk = 0;
+  function getChunk(attempt) {
+    var url = '/api/data?entity=' + entity + '&chunk=' + chunk;
+    return fetch(url).then(function (r) {
+      if (r.status >= 500 && attempt < 2) {
+        return new Promise(function (res) { setTimeout(res, 1500); }).then(function () { return getChunk(attempt + 1); });
+      }
+      if (!r.ok) throw new Error(entity + ' HTTP ' + r.status);
+      return r.json();
+    });
+  }
   function next() {
-    var url = '/api/data?entity=' + entity + '&limit=100&page=' + page;
-    return fetch(url)
-      .then(function (r) {
-        if (!r.ok) throw new Error(entity + ' HTTP ' + r.status);
-        return r.json();
-      })
-      .then(function (d) {
-        if (d.error) throw new Error(entity + ': ' + JSON.stringify(d.error).slice(0, 80));
-        var items = (d.response && d.response.items) || [];
-        all = all.concat(items);
-        var total = (d.response && d.response.total) || 0;
-        setStatus('&#9679; ' + entity + ': ' + all.length + ' / ' + total);
-        if (all.length >= total || items.length < 100) return all;
-        page++;
-        return next();
-      });
+    return getChunk(0).then(function (d) {
+      if (d.error) throw new Error(entity + ': ' + JSON.stringify(d.error).slice(0, 80));
+      var items = (d.response && d.response.items) || [];
+      all = all.concat(items);
+      var total = (d.response && d.response.total) || 0;
+      setStatus('&#9679; ' + entity + ': ' + all.length + ' / ' + total);
+      if (all.length >= total || items.length === 0) return all;
+      chunk++;
+      return next();
+    });
   }
   return next();
 }
@@ -2562,9 +2568,10 @@ function renderChanges(cur, prev, prevEnd, baseNote) {
   function f1(v) { var x = Math.round(v / 1e5) / 10; if (Math.abs(x) < 0.05) x = 0;
     var s = Math.abs(x).toFixed(1).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, ' '); return (x < 0 ? '−' : '') + s; }
   function sg(v) { var s = f1(v); return (v > 0 ? '+' : '') + s; }
-  // Один фрагмент «что: ±Δ млн (было → стало)»
-  function part(what, a, b) {
-    var d = b - a, clr = d > 0 ? '#15803d' : '#dc2626';
+  // Один фрагмент «что: ±Δ млн (было → стало)». Цвет — по смыслу: зелёный = улучшение, красный = ухудшение
+  // (для затрат и бюджета расходов рост — ухудшение: upBad = true).
+  function part(what, a, b, upBad) {
+    var d = b - a, good = upBad ? d < 0 : d > 0, clr = good ? '#15803d' : '#dc2626';
     return what + ': <b style="color:' + clr + '">' + sg(d) + ' млн</b> (' + f1(a) + ' → ' + f1(b) + ')';
   }
   function big(a, b) { return Math.abs((b || 0) - (a || 0)) > CHG_THRESHOLD; }
@@ -2578,7 +2585,7 @@ function renderChanges(cur, prev, prevEnd, baseNote) {
     var ps = [];
     if (big(a.mar, b.mar))   ps.push(part('плановая маржа', a.mar, b.mar));
     if (big(a.rev, b.rev))   ps.push(part('плановая выручка', a.rev, b.rev));
-    if (big(a.cost, b.cost)) ps.push(part('плановые затраты', a.cost, b.cost));
+    if (big(a.cost, b.cost)) ps.push(part('плановые затраты', a.cost, b.cost, true));
     if (ps.length) g1 += '<li>' + n + ' — ' + ps.join(', ') + '</li>';
   });
   // ── Административные расходы: статьи + итог с основным источником изменения ──
@@ -2586,7 +2593,7 @@ function renderChanges(cur, prev, prevEnd, baseNote) {
   Object.keys(cur.admin || {}).forEach(function (k) {
     if (k === AT) return;
     var a = (prev.admin || {})[k] || 0, b = cur.admin[k] || 0;
-    if (big(a, b)) g2 += '<li>' + k + ' — ' + part('бюджет', a, b) + '</li>';
+    if (big(a, b)) g2 += '<li>' + k + ' — ' + part('бюджет', a, b, true) + '</li>';
   });
   var ta = (prev.admin || {})[AT] || 0, tb = (cur.admin || {})[AT] || 0;
   if (big(ta, tb)) {
@@ -2596,7 +2603,7 @@ function renderChanges(cur, prev, prevEnd, baseNote) {
       var d = (cur.admin[k] || 0) - ((prev.admin || {})[k] || 0);
       if (d * dT > 0 && Math.abs(d) > Math.abs(topD)) { top = k; topD = d; }
     });
-    g2 += '<li><b>' + AT + '</b> — ' + part('бюджет', ta, tb)
+    g2 += '<li><b>' + AT + '</b> — ' + part('бюджет', ta, tb, true)
       + (top ? '; основной вклад — ' + top + ' ' + sg(topD) + ' млн' : '') + '</li>';
   }
   // ── Расходы из чистой прибыли ──

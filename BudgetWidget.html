@@ -212,25 +212,31 @@ function planRevVatRate() {
 
 // ── API ───────────────────────────────────────────────────────────────────────
 
+// Загрузка «пачками»: /api/data?chunk=N — до 15 страниц Аспро (1500 записей) за один запрос.
+// При ошибке сервера (502/504) пачка запрашивается повторно (до 2 повторов). Ответы кешируются CDN на 2 минуты.
 function fetchAll(entity) {
-  var all = [], page = 1;
+  var all = [], chunk = 0;
+  function getChunk(attempt) {
+    var url = '/api/data?entity=' + entity + '&chunk=' + chunk;
+    return fetch(url).then(function (r) {
+      if (r.status >= 500 && attempt < 2) {
+        return new Promise(function (res) { setTimeout(res, 1500); }).then(function () { return getChunk(attempt + 1); });
+      }
+      if (!r.ok) throw new Error(entity + ' HTTP ' + r.status);
+      return r.json();
+    });
+  }
   function next() {
-    var url = '/api/data?entity=' + entity + '&limit=100&page=' + page;
-    return fetch(url)
-      .then(function (r) {
-        if (!r.ok) throw new Error(entity + ' HTTP ' + r.status);
-        return r.json();
-      })
-      .then(function (d) {
-        if (d.error) throw new Error(entity + ': ' + JSON.stringify(d.error).slice(0, 80));
-        var items = (d.response && d.response.items) || [];
-        all = all.concat(items);
-        var total = (d.response && d.response.total) || 0;
-        setStatus('&#9679; ' + entity + ': ' + all.length + ' / ' + total);
-        if (all.length >= total || items.length < 100) return all;
-        page++;
-        return next();
-      });
+    return getChunk(0).then(function (d) {
+      if (d.error) throw new Error(entity + ': ' + JSON.stringify(d.error).slice(0, 80));
+      var items = (d.response && d.response.items) || [];
+      all = all.concat(items);
+      var total = (d.response && d.response.total) || 0;
+      setStatus('&#9679; ' + entity + ': ' + all.length + ' / ' + total);
+      if (all.length >= total || items.length === 0) return all;
+      chunk++;
+      return next();
+    });
   }
   return next();
 }
