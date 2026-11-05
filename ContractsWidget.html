@@ -91,6 +91,7 @@ body {
     <button id="refresh-btn" title="Обновить">&#8635;</button>
   </div>
 </div>
+<div id="snap-bar" style="text-align:right;font-size:11px;color:#6b7280;margin:-2px 0 8px;min-height:14px"></div>
 
 <div id="content">
   <div style="padding:20px;text-align:center;color:#6b7280">&#8987; Загружаем данные...</div>
@@ -935,19 +936,31 @@ function buildTable(agg, txns, plans, catMap, endDate, plsItems, b1fc) {
     if (+tx.category_id === 3144) vatFact += parseFloat(tx.outcome) || 0;
   });
 
-  // A: плановые платежи по статье НДС (plan_money cat=3144, будущие даты)
+  // A: плановые платежи НДС в бюджет (plan_money cat=3144 на Бюджетном/Внебюджетном лимите, с текущего месяца) —
+  //    только неоплаченный остаток: сумма плана минус уже оплаченное по нему (транзакции с этим plan_money_id
+  //    по дату отчёта), как в Бюджет1 (строка «Налоги (НДС, Прибыль)»). Корректировки НДС (счёт 149) здесь
+  //    не учитываются — они уже входят в «Ожидаемый текущий/плановый НДС» Бюджет1 (B, C).
+  var _paidByPm = {};
+  txns.forEach(function(tx) {
+    if (!tx.plan_money_id || !tx.date || tx.date > endDate) return;
+    _paidByPm[tx.plan_money_id] = (_paidByPm[tx.plan_money_id] || 0) + (parseFloat(tx.outcome) || 0);
+  });
   var vatPlanPmt = 0;
   plans.forEach(function(item) {
     var dt = item.plan_paid_date || '';
     if (!dt || dt < curMonthStart) return;
-    if (+item.category_id === 3144) vatPlanPmt += parseFloat(item.total) || 0;
+    if (+item.category_id !== 3144) return;
+    if (+item.org_account_id !== 36 && +item.org_account_id !== 150) return;
+    var rest = (parseFloat(item.total) || 0) - (_paidByPm[item.id] || 0);
+    if (rest > 0) vatPlanPmt += rest;
   });
 
   // B: Ожидаемый текущий НДС — идентично нижней таблице (с учётом корректировок vatAdj)
   // C: Ожидаемый плановый НДС — идентично нижней таблице
   var _b1vat     = calcB1VatForecast(endDate);
   var vatCurQ_vat = -_b1vat.vatFact;  // B = "Ожидаемый текущий НДС" (знак расхода: НДС к уплате > 0)
-  var vatFutureP  = -_b1vat.vatPlan;  // C = "Ожидаемый плановый НДС" (знак расхода)
+  // C = "Ожидаемый плановый НДС" (знак расхода) — то же значение, что в Прогнозе ДС (порт Бюджет1)
+  var vatFutureP  = -((b1fc && b1fc.vatPlan !== undefined) ? b1fc.vatPlan : _b1vat.vatPlan);
 
   // Остаток = A + B + C; План = Факт + Остаток
   var vatRemainder = vatPlanPmt + vatCurQ_vat + vatFutureP;
@@ -2593,7 +2606,11 @@ function renderContracts(C, endDate, opts) {
       var c = function (v) { return '<td style="color:' + (v < 0 ? RD : (v > 0 ? GR : GY)) + '">' + (Math.abs(v) < 5e4 ? '0,0' : sg(v)) + '</td>'; };
       return '<tr' + (cls ? ' class="' + cls + '"' : '') + '><td style="text-align:left">' + l + '</td>' + c(r.budget || 0) + c(r.fact) + c(r.plan) + c(it) + '</tr>';
     };
-    var ct = '<table class="c-tbl"><thead><tr><th style="text-align:left">Статья</th><th>Бюджет</th><th>Факт</th><th>Остаток плана</th><th>Итого</th></tr></thead><tbody>';
+    var ct = '<table class="c-tbl"><thead><tr><th style="text-align:left">Статья</th>'
+      + '<th title="Сумма всех плановых платежей строки (Бюджетный/Внебюджетный лимит), включая уже оплаченные">Бюджет (план. платежи)</th>'
+      + '<th title="Деньги, фактически полученные (+) и выплаченные (−) по строке с 01.01.2024 по дату отчёта">Факт</th>'
+      + '<th title="Неоплаченная часть плановых платежей с текущего месяца">Осталось по плану</th>'
+      + '<th title="Факт + Осталось по плану: итоговый денежный результат строки после исполнения плана">Итог (факт + осталось)</th></tr></thead><tbody>';
     CT.rows.forEach(function (r) { ct += crow(r.label, r); });
     ct += crow('ИТОГО займы', CT.loans, 'sub');
     ct += crow('Внепроектные расходы (нетто)', CT.other);
@@ -2601,7 +2618,9 @@ function renderContracts(C, endDate, opts) {
     ct += '</tbody></table>';
     h += '<div class="c-h2">Расходы из чистой прибыли</div>'
       + '<div class="c-note">Проект «Прочие/Закрытые». Поступления со знаком «+», выплаты «−». Факт — по ' + dStr
-      + '; Бюджет — все плановые платежи строки (включая оплаченные); Остаток плана — плановые платежи с текущего месяца за вычетом уже оплаченного; Итого = Факт + Остаток плана.</div>' + ct;
+      + '. «Бюджет» — сумма плановых платежей строки, включая оплаченные (поступления без планового платежа в него не входят); '
+      + '«Осталось по плану» — неоплаченная часть плановых платежей с текущего месяца; «Итог» = Факт + Осталось по плану — '
+      + 'чем строка закончится для компании, когда план будет исполнен (по закрытому займу — уплаченные проценты).</div>' + ct;
   }
 
   h += '<div class="c-src">Источник: Аспро Cloud, расчёт по алгоритму виджета Бюджет2 на ' + dStr + '. '
@@ -2655,7 +2674,23 @@ function _chgPrevMonthEnd(endDate) {
   var d = new Date(y, m - 1, 0);   // последний день предыдущего месяца
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 }
-function renderChanges(cur, prev, prevEnd, baseNote) {
+// Строки переносов и корректировок бюджета, решения по которым приняты в месяце отчёта
+// (месяц в названии «Перенос± ММ.ГГГГ» / «КБ± ММ.ГГГГ» = месяц даты отчёта). Сумма со знаком из названия.
+function budgetChgLines(endDate) {
+  var re = /^\s*(перенос|кб)\s*([+\-\u2212\u2013]?)\s*(\d{1,2})\.(\d{4})/i;
+  var eYM = +endDate.slice(0, 4) * 100 + +endDate.slice(5, 7);
+  var out = { tr: [], kb: [] };
+  (_plansAll || []).forEach(function (p) {
+    var m = re.exec(p.name || '');
+    if (!m || +m[4] * 100 + +m[3] !== eYM) return;
+    if (+p.org_account_id !== 36 && +p.org_account_id !== 150) return;
+    var sgn = (m[2] && m[2] !== '+') ? -1 : 1;
+    var v = sgn * Math.abs(parseFloat(p.total) || 0) * (p.type === 30 ? -1 : 1);   // + рост бюджета расходов
+    out[/^перенос/i.test(m[1]) ? 'tr' : 'kb'].push({ pid: +p.project_id, name: p.name, date: p.plan_paid_date || '', v: v });
+  });
+  return out;
+}
+function renderChanges(cur, prev, prevEnd, baseNote, chgLines) {
   function f1(v) { var x = Math.round(v / 1e5) / 10; if (Math.abs(x) < 0.05) x = 0;
     var s = Math.abs(x).toFixed(1).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, ' '); return (x < 0 ? '−' : '') + s; }
   function sg(v) { var s = f1(v); return (v > 0 ? '+' : '') + s; }
@@ -2666,19 +2701,21 @@ function renderChanges(cur, prev, prevEnd, baseNote) {
     return what + ': <b style="color:' + clr + '">' + sg(d) + ' млн</b> (' + f1(a) + ' → ' + f1(b) + ')';
   }
   function big(a, b) { return Math.abs((b || 0) - (a || 0)) > CHG_THRESHOLD; }
-  var g1 = '', g2 = '', g3 = '';
-  // ── По договорам: все изменения по проекту — одной строкой ──
-  var names = {};
-  Object.keys(cur.proj || {}).forEach(function (n) { names[n] = 1; });
-  Object.keys(prev.proj || {}).forEach(function (n) { names[n] = 1; });
-  Object.keys(names).forEach(function (n) {
-    var a = prev.proj[n] || { rev: 0, cost: 0, mar: 0 }, b = cur.proj[n] || { rev: 0, cost: 0, mar: 0 };
-    var ps = [];
-    if (big(a.mar, b.mar))   ps.push(part('плановая маржа', a.mar, b.mar));
-    if (big(a.rev, b.rev))   ps.push(part('плановая выручка', a.rev, b.rev));
-    if (big(a.cost, b.cost)) ps.push(part('плановые затраты', a.cost, b.cost, true));
-    if (ps.length) g1 += '<li>' + n + ' — ' + ps.join(', ') + '</li>';
-  });
+  var g1 = '', g2 = '', g3 = '', gT = '', gK = '';
+  // ── По договорам: переносы и изменения бюджета (строки «Перенос±» / «КБ±» с месяцем решения = месяц отчёта) ──
+  function tys(v) { var x = Math.round(v / 1000); return (x > 0 ? '+' : x < 0 ? '−' : '') + Math.abs(x).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' тыс.'; }
+  function chgList(arr) {
+    if (!arr || !arr.length) return '';
+    var tot = 0;
+    var li = arr.slice().sort(function (a, b) { return a.pid - b.pid || a.date.localeCompare(b.date); }).map(function (x) {
+      tot += x.v;
+      var d = x.date ? x.date.split('-').reverse().join('.') : '';
+      return '<li>' + (PROJ_NAME_MAP[x.pid] || ('проект ' + x.pid)) + ': <b style="color:' + (x.v > 0 ? '#dc2626' : '#15803d') + '">' + tys(x.v) + '</b>'
+        + ' <span style="color:#6b7280">— «' + x.name + '», плановая дата ' + d + '</span></li>';
+    }).join('');
+    return li + '<li><b>Итого: ' + tys(tot) + '</b> <span style="color:#6b7280">(«+» — рост бюджета расходов)</span></li>';
+  }
+  if (chgLines) { gT = chgList(chgLines.tr); gK = chgList(chgLines.kb); }
   // ── Административные расходы: статьи + итог с основным источником изменения ──
   var AT = 'Итого административные расходы';
   Object.keys(cur.admin || {}).forEach(function (k) {
@@ -2706,11 +2743,12 @@ function renderChanges(cur, prev, prevEnd, baseNote) {
     if (big(a, b)) g3 += '<li>' + k + ' — ' + part('итого', a, b) + '</li>';
   });
   var dStr = prevEnd.split('-').reverse().join('.');
-  var h = '<div class="c-note">Изменения плановых параметров свыше 1 млн ₽ по сравнению с отчётом на ' + dStr + '. ' + (baseNote || '') + '</div>';
-  if (!g1 && !g2 && !g3) return h + '<div style="font-size:12px;color:#374151">Изменений свыше 1 млн ₽ нет.</div>';
+  var h = '<div class="c-note">По сравнению с отчётом на ' + dStr + '. ' + (baseNote || '') + '</div>';
+  if (!gT && !gK && !g2 && !g3) return h + '<div style="font-size:12px;color:#374151">Изменений нет.</div>';
   var ul = function (t, x) { return x ? '<div class="c-h2">' + t + '</div><ul style="margin:2px 0 6px 18px;padding:0;font-size:12px;line-height:1.6;color:#374151">' + x + '</ul>' : ''; };
-  return h + ul('По договорам', g1) + ul('Административные расходы', g2)
-    + ul('Расходы из чистой прибыли (поступления «+», выплаты «−»)', g3);
+  return h + ul('По договорам — переносы', gT) + ul('По договорам — изменения бюджета', gK)
+    + ul('Административные расходы (изменения свыше 1 млн ₽)', g2)
+    + ul('Расходы из чистой прибыли (изменения свыше 1 млн ₽; поступления «+», выплаты «−»)', g3);
 }
 // Отчёт на дату + изменения к концу прошлого месяца + раскрывающийся отчёт на конец прошлого месяца.
 // Если отчёт на конец прошлого месяца зафиксирован (снимок в Vercel KV), сравнение и нижний блок берутся из снимка,
@@ -2723,9 +2761,11 @@ function renderContractsWithPrev(endDate) {
   var curC = calcContractsC(endDate);
   var curKP = contractsKeyParams(curC);
   var pStr = prevEnd.split('-').reverse().join('.');
-  var chg = renderChanges(curKP, prevKP, prevEnd, 'Отчёт на ' + pStr + ' рассчитан по текущим данным Аспро (месяц не зафиксирован).');
+  var chgLines = budgetChgLines(endDate);
+  window.__chgLines = chgLines;
+  var chg = renderChanges(curKP, prevKP, prevEnd, '', chgLines);
   setTimeout(function () { _snapApply(endDate, prevEnd, curKP, prevKP, prevHtml); }, 0);
-  return renderContracts(curC, endDate, { changesHtml: '<div id="snap-bar" style="font-size:11px;color:#6b7280;margin:2px 0 6px"></div><div id="chg-box">' + chg + '</div>' })
+  return renderContracts(curC, endDate, { changesHtml: '<div id="chg-box">' + chg + '</div>' })
     + '<details style="margin-top:18px;border-top:2px solid #e5e7eb;padding-top:6px">'
     + '<summary style="cursor:pointer;font-size:13px;font-weight:700;color:#374151">Отчёт на ' + pStr + ' (конец прошлого месяца)</summary>'
     + '<div id="prev-box" style="margin-top:8px">' + prevHtml + '</div></details>';
@@ -2761,7 +2801,7 @@ function _snapApply(endDate, prevEnd, curKP, prevKP, prevHtml) {
       + ' ' + ('0' + at.getHours()).slice(-2) + ':' + ('0' + at.getMinutes()).slice(-2);
     bar.innerHTML = '&#128274; Отчёт на ' + pStr + ' зафиксирован ' + atStr + '; сравнение — с зафиксированными цифрами.';
     var cb = document.getElementById('chg-box'), pb = document.getElementById('prev-box');
-    if (cb) cb.innerHTML = renderChanges(curKP, snap.kp, prevEnd, 'Сравнение с отчётом, зафиксированным ' + atStr + '.');
+    if (cb) cb.innerHTML = renderChanges(curKP, snap.kp, prevEnd, 'Отчёт зафиксирован ' + atStr + '.', window.__chgLines);
     if (pb && snap.html) pb.innerHTML = snap.html;
   }).catch(function (e) {
     bar.innerHTML = 'Не удалось проверить фиксацию отчёта на ' + pStr + ': ' + e.message;

@@ -891,19 +891,31 @@ function buildTable(agg, txns, plans, catMap, endDate, plsItems, b1fc) {
     if (+tx.category_id === 3144) vatFact += parseFloat(tx.outcome) || 0;
   });
 
-  // A: плановые платежи по статье НДС (plan_money cat=3144, будущие даты)
+  // A: плановые платежи НДС в бюджет (plan_money cat=3144 на Бюджетном/Внебюджетном лимите, с текущего месяца) —
+  //    только неоплаченный остаток: сумма плана минус уже оплаченное по нему (транзакции с этим plan_money_id
+  //    по дату отчёта), как в Бюджет1 (строка «Налоги (НДС, Прибыль)»). Корректировки НДС (счёт 149) здесь
+  //    не учитываются — они уже входят в «Ожидаемый текущий/плановый НДС» Бюджет1 (B, C).
+  var _paidByPm = {};
+  txns.forEach(function(tx) {
+    if (!tx.plan_money_id || !tx.date || tx.date > endDate) return;
+    _paidByPm[tx.plan_money_id] = (_paidByPm[tx.plan_money_id] || 0) + (parseFloat(tx.outcome) || 0);
+  });
   var vatPlanPmt = 0;
   plans.forEach(function(item) {
     var dt = item.plan_paid_date || '';
     if (!dt || dt < curMonthStart) return;
-    if (+item.category_id === 3144) vatPlanPmt += parseFloat(item.total) || 0;
+    if (+item.category_id !== 3144) return;
+    if (+item.org_account_id !== 36 && +item.org_account_id !== 150) return;
+    var rest = (parseFloat(item.total) || 0) - (_paidByPm[item.id] || 0);
+    if (rest > 0) vatPlanPmt += rest;
   });
 
   // B: Ожидаемый текущий НДС — идентично нижней таблице (с учётом корректировок vatAdj)
   // C: Ожидаемый плановый НДС — идентично нижней таблице
   var _b1vat     = calcB1VatForecast(endDate);
   var vatCurQ_vat = -_b1vat.vatFact;  // B = "Ожидаемый текущий НДС" (знак расхода: НДС к уплате > 0)
-  var vatFutureP  = -_b1vat.vatPlan;  // C = "Ожидаемый плановый НДС" (знак расхода)
+  // C = "Ожидаемый плановый НДС" (знак расхода) — то же значение, что в Прогнозе ДС (порт Бюджет1)
+  var vatFutureP  = -((b1fc && b1fc.vatPlan !== undefined) ? b1fc.vatPlan : _b1vat.vatPlan);
 
   // Остаток = A + B + C; План = Факт + Остаток
   var vatRemainder = vatPlanPmt + vatCurQ_vat + vatFutureP;
