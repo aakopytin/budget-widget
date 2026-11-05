@@ -2728,7 +2728,24 @@ var _plansAll = null;   // все плановые платежи из Аспр�
 //    строки, созданные после даты отчёта с плановой датой после даты отчёта, — новые решения, которых на дату
 //    отчёта не было, исключаются; созданные позже, но с плановой датой не позже даты отчёта (дозанесение
 //    за период) — учитываются.
+// 3) Внебюджетный лимит (счёт 150): только плановые платежи по месяц отчёта включительно; внебюджетные
+//    платежи следующих месяцев в отчёт не входят (как в Бюджет1).
 var BUDGET_CHG_RE = /^\s*(перенос|кб)\s*([+\-\u2212\u2013]?)\s*(\d{1,2})\.(\d{4})/i;
+// Транзакция, привязанная к плановому платежу займа/кредита, учитывается по категории этого планового платежа
+// (погашение/получение займа), даже если в самой транзакции стоит другая категория, например «Проценты к уплате»
+// (как в Бюджет1). Исходная категория сохраняется в orig_category_id.
+var LOAN_PLAN_CATS = {'Получение займа': 1, 'Выплата займа': 1, 'Получение кредита': 1, 'Выплата кредита': 1};
+function normLoanTx(txns) {
+  var pmCat = {};
+  (_plansAll || []).forEach(function (p) {
+    if (LOAN_PLAN_CATS[(_cats && _cats[+p.category_id]) || '']) pmCat[p.id] = p.category_id;
+  });
+  return (txns || []).map(function (tx) {
+    var pc = tx.plan_money_id && pmCat[tx.plan_money_id];
+    if (!pc || LOAN_PLAN_CATS[(_cats && _cats[+tx.category_id]) || '']) return tx;
+    return Object.assign({}, tx, { category_id: pc, orig_category_id: tx.category_id });
+  });
+}
 function plansAsOf(endDate) {
   var eYM = +endDate.slice(0, 4) * 100 + +endDate.slice(5, 7);
   var now = new Date(), cl = new Date(now.getFullYear(), now.getMonth(), 0);   // конец прошлого месяца
@@ -2744,6 +2761,7 @@ function plansAsOf(endDate) {
       return;
     }
     var cd = (p.created_date || '').slice(0, 10), pd = p.plan_paid_date || '';
+    if (+p.org_account_id === 150 && pd && +pd.slice(0, 4) * 100 + +pd.slice(5, 7) > eYM) return;
     if (byCreated && cd && cd > endDate && pd > endDate) return;
     out.push(p);
   });
@@ -2809,6 +2827,7 @@ function loadData() {
   })
   .then(function (accts) {
     _bankAccounts = accts || [];
+    _txns = normLoanTx(_txns);
     render();
   })
   .catch(function (e) {
