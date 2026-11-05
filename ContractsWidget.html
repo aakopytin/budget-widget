@@ -387,7 +387,8 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
 
     if (ADMIN_PIDS[tx.project_id]) {
       // Процентные и прочие доходы ВСИП/ТТ → колонка «Прочие проекты» (без НДС)
-      if (incAmt > 0 && (catName === 'Проценты к получению' || catName === 'Прочий доход')) {
+      // (все доходные категории INC_CAT_NAMES, напр. «Возврат ДС. за заказы» — иначе поступление выпадает из ЧП)
+      if (incAmt > 0 && INC_CAT_NAMES[catName]) {
         var ciAdmR = PROJ_COLS.length - 1;
         addV(revF, ciAdmR, incAmt);
         if (isPast) addV(revP, ciAdmR, incAmt);
@@ -510,7 +511,7 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
 
     if (ADMIN_PIDS[item.project_id]) {
       // Процентные и прочие доходы ВСИП/ТТ (plan_money type=30) → Прочие проекты (без НДС)
-      if (item.type === 30 && (catName === 'Проценты к получению' || catName === 'Прочий доход')) {
+      if (item.type === 30 && INC_CAT_NAMES[catName]) {
         var ciAdmR2 = PROJ_COLS.length - 1;
         addV(revP, ciAdmR2, val);
         var ppAdmR2 = getProchPP(item.project_id);
@@ -932,7 +933,9 @@ function buildTable(agg, txns, plans, catMap, endDate, plsItems, b1fc) {
   txns.forEach(function(tx) {
     var dt = tx.date || '';
     if (!dt || dt < START_DATE || dt > endDate) return;
-    if (!VSIP_ACC_IDS[tx.org_account_id] && !TT_ACC_IDS[tx.org_account_id]) return;
+    var _a = +tx.org_account_id;
+    // счета остатка ДС Бюджет1: ВСИП, ТТ и «ВСИП Прочие» (211 ВСИП СС, 212 ВСИП ИП)
+    if (!VSIP_ACC_IDS[_a] && !TT_ACC_IDS[_a] && _a !== 211 && _a !== 212) return;
     if (+tx.category_id === 3144) vatFact += parseFloat(tx.outcome) || 0;
   });
 
@@ -2688,7 +2691,42 @@ function budgetChgLines(endDate) {
   });
   return out;
 }
-function renderChanges(cur, prev, prevEnd, baseNote, chgLines) {
+// Крупные события месяца отчёта (с 1-го числа по дату отчёта), реальные счета, без переводов между счетами:
+// • поступления и выплаты по отдельным транзакциям больше 5 млн ₽ (без суммирования по контрагенту);
+// • займы и кредиты — суммарно за месяц по займу (строки займов «Расходов из ЧП»; прочие — по проекту и статье),
+//   если сумма выплат или получений по займу больше 5 млн ₽.
+var BIG_EVENT = 5e6;
+function bigEvents(endDate) {
+  var ms = endDate.slice(0, 7) + '-01';
+  var LOAN = {'Получение кредита': 1, 'Выплата кредита': 1, 'Получение займа': 1, 'Выплата займа': 1};
+  var rowByCrm = {}, rowLabel = {};
+  CHP_LOAN_ROWS.forEach(function (r) { rowLabel[r.key] = r.label; Object.keys(r.crm).forEach(function (c) { rowByCrm[+c] = r.key; }); });
+  var pmRow = {};
+  (_plansAll || []).forEach(function (it) {
+    var r = CHP_PLAN_ROW[it.id] || chpRowOf(it.project_id, it.crm_company_id, it.category_id, rowByCrm);
+    if (r && r !== 'other') pmRow[it.id] = r;
+  });
+  var tx = [], loans = {};
+  _txns.forEach(function (t) {
+    var dt = t.date || '';
+    if (!dt || dt < ms || dt > endDate || !REAL_ACC[+t.org_account_id]) return;
+    var cn = (_cats && _cats[+t.category_id]) || '';
+    if (/Перевод между счетами/.test(cn)) return;
+    var inc = parseFloat(t.income) || 0, out = parseFloat(t.outcome) || 0;
+    var row = chpRowOf(t.project_id, t.crm_account_id, t.category_id, rowByCrm);
+    if (row === 'other' && t.plan_money_id && pmRow[t.plan_money_id]) row = pmRow[t.plan_money_id];
+    if ((row && row !== 'other') || LOAN[cn]) {
+      var k = (row && row !== 'other') ? rowLabel[row] : ((PROJ_NAME_MAP[+t.project_id] || ('проект ' + t.project_id)) + ' — ' + (/кредит/i.test(cn) ? 'кредит' : 'займ'));
+      var L = loans[k] || (loans[k] = { inc: 0, out: 0, n: 0 });
+      L.inc += inc; L.out += out; L.n++;
+      return;
+    }
+    if (inc > BIG_EVENT || out > BIG_EVENT)
+      tx.push({ dt: dt, pid: +t.project_id, cn: cn, v: inc - out, name: t.name || '' });
+  });
+  return { tx: tx.sort(function (a, b) { return a.dt.localeCompare(b.dt); }), loans: loans };
+}
+function renderChanges(cur, prev, prevEnd, baseNote, chgLines, bigEv) {
   function f1(v) { var x = Math.round(v / 1e5) / 10; if (Math.abs(x) < 0.05) x = 0;
     var s = Math.abs(x).toFixed(1).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, ' '); return (x < 0 ? '−' : '') + s; }
   function sg(v) { var s = f1(v); return (v > 0 ? '+' : '') + s; }
@@ -2718,6 +2756,19 @@ function renderChanges(cur, prev, prevEnd, baseNote, chgLines) {
     return li + '<li><b>Итого: ' + tys(tot) + '</b> <span style="color:#6b7280">(«+» — рост бюджета расходов)</span></li>';
   }
   if (chgLines) { gT = chgList(chgLines.tr); gK = chgList(chgLines.kb); }
+  var gB = '';
+  if (bigEv) {
+    var mln = function (v) { var x = Math.round(Math.abs(v) / 1e5) / 10; return x.toFixed(1).replace('.', ','); };
+    bigEv.tx.forEach(function (e) {
+      gB += '<li>' + e.dt.split('-').reverse().join('.') + ' — ' + (e.v > 0 ? 'поступление' : 'выплата') + ' <b style="color:' + (e.v > 0 ? '#15803d' : '#dc2626') + '">'
+        + (e.v > 0 ? '+' : '−') + mln(e.v) + ' млн</b>: ' + (PROJ_NAME_MAP[e.pid] || ('проект ' + e.pid)) + ', «' + e.cn + '»</li>';
+    });
+    Object.keys(bigEv.loans).forEach(function (k) {
+      var L = bigEv.loans[k];
+      if (L.out > BIG_EVENT) gB += '<li>Выплата займа <b style="color:#dc2626">−' + mln(L.out) + ' млн</b>: ' + k + ' <span style="color:#6b7280">(' + L.n + ' плат. за месяц)</span></li>';
+      if (L.inc > BIG_EVENT) gB += '<li>Получение займа <b style="color:#15803d">+' + mln(L.inc) + ' млн</b>: ' + k + '</li>';
+    });
+  }
   // ── Административные расходы: статьи + итог с основным источником изменения ──
   var AT = 'Итого административные расходы';
   Object.keys(cur.admin || {}).forEach(function (k) {
@@ -2746,9 +2797,9 @@ function renderChanges(cur, prev, prevEnd, baseNote, chgLines) {
   });
   var dStr = prevEnd.split('-').reverse().join('.');
   var h = '<div class="c-note">По сравнению с отчётом на ' + dStr + '. ' + (baseNote || '') + '</div>';
-  if (!gT && !gK && !g2 && !g3) return h + '<div style="font-size:12px;color:#374151">Изменений нет.</div>';
+  if (!gB && !gT && !gK && !g2 && !g3) return h + '<div style="font-size:12px;color:#374151">Изменений нет.</div>';
   var ul = function (t, x) { return x ? '<div class="c-h2">' + t + '</div><ul style="margin:2px 0 6px 18px;padding:0;font-size:12px;line-height:1.6;color:#374151">' + x + '</ul>' : ''; };
-  return h + ul('По договорам — переносы', gT) + ul('По договорам — изменения бюджета', gK)
+  return h + ul('Крупные события (поступления и выплаты свыше 5 млн ₽; займы — суммарно за месяц)', gB) + ul('По договорам — переносы', gT) + ul('По договорам — изменения бюджета', gK)
     + ul('Административные расходы (изменения свыше 1 млн ₽)', g2)
     + ul('Расходы из чистой прибыли (изменения свыше 1 млн ₽; поступления «+», выплаты «−»)', g3);
 }
@@ -2765,7 +2816,9 @@ function renderContractsWithPrev(endDate) {
   var pStr = prevEnd.split('-').reverse().join('.');
   var chgLines = budgetChgLines(endDate);
   window.__chgLines = chgLines;
-  var chg = renderChanges(curKP, prevKP, prevEnd, '', chgLines);
+  var bigEv = bigEvents(endDate);
+  window.__bigEv = bigEv;
+  var chg = renderChanges(curKP, prevKP, prevEnd, '', chgLines, bigEv);
   setTimeout(function () { _snapApply(endDate, prevEnd, curKP, prevKP, prevHtml); }, 0);
   return renderContracts(curC, endDate, { changesHtml: '<div id="chg-box">' + chg + '</div>' })
     + '<details style="margin-top:18px;border-top:2px solid #e5e7eb;padding-top:6px">'
@@ -2803,7 +2856,7 @@ function _snapApply(endDate, prevEnd, curKP, prevKP, prevHtml) {
       + ' ' + ('0' + at.getHours()).slice(-2) + ':' + ('0' + at.getMinutes()).slice(-2);
     bar.innerHTML = '&#128274; Отчёт на ' + pStr + ' зафиксирован ' + atStr + '; сравнение — с зафиксированными цифрами.';
     var cb = document.getElementById('chg-box'), pb = document.getElementById('prev-box');
-    if (cb) cb.innerHTML = renderChanges(curKP, snap.kp, prevEnd, 'Отчёт зафиксирован ' + atStr + '.', window.__chgLines);
+    if (cb) cb.innerHTML = renderChanges(curKP, snap.kp, prevEnd, 'Отчёт зафиксирован ' + atStr + '.', window.__chgLines, window.__bigEv);
     if (pb && snap.html) pb.innerHTML = snap.html;
   }).catch(function (e) {
     bar.innerHTML = 'Не удалось проверить фиксацию отчёта на ' + pStr + ': ' + e.message;

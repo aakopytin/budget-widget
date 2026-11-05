@@ -342,7 +342,8 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
 
     if (ADMIN_PIDS[tx.project_id]) {
       // Процентные и прочие доходы ВСИП/ТТ → колонка «Прочие проекты» (без НДС)
-      if (incAmt > 0 && (catName === 'Проценты к получению' || catName === 'Прочий доход')) {
+      // (все доходные категории INC_CAT_NAMES, напр. «Возврат ДС. за заказы» — иначе поступление выпадает из ЧП)
+      if (incAmt > 0 && INC_CAT_NAMES[catName]) {
         var ciAdmR = PROJ_COLS.length - 1;
         addV(revF, ciAdmR, incAmt);
         if (isPast) addV(revP, ciAdmR, incAmt);
@@ -465,7 +466,7 @@ function aggregate(plans, txns, plsItems, catMap, endDate) {
 
     if (ADMIN_PIDS[item.project_id]) {
       // Процентные и прочие доходы ВСИП/ТТ (plan_money type=30) → Прочие проекты (без НДС)
-      if (item.type === 30 && (catName === 'Проценты к получению' || catName === 'Прочий доход')) {
+      if (item.type === 30 && INC_CAT_NAMES[catName]) {
         var ciAdmR2 = PROJ_COLS.length - 1;
         addV(revP, ciAdmR2, val);
         var ppAdmR2 = getProchPP(item.project_id);
@@ -887,7 +888,9 @@ function buildTable(agg, txns, plans, catMap, endDate, plsItems, b1fc) {
   txns.forEach(function(tx) {
     var dt = tx.date || '';
     if (!dt || dt < START_DATE || dt > endDate) return;
-    if (!VSIP_ACC_IDS[tx.org_account_id] && !TT_ACC_IDS[tx.org_account_id]) return;
+    var _a = +tx.org_account_id;
+    // счета остатка ДС Бюджет1: ВСИП, ТТ и «ВСИП Прочие» (211 ВСИП СС, 212 ВСИП ИП)
+    if (!VSIP_ACC_IDS[_a] && !TT_ACC_IDS[_a] && _a !== 211 && _a !== 212) return;
     if (+tx.category_id === 3144) vatFact += parseFloat(tx.outcome) || 0;
   });
 
