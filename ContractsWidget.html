@@ -73,6 +73,7 @@ body {
 .ad-b{height:8px;background:#f59e0b}
 .ad-v{font-size:11px;color:#6b7280;white-space:nowrap}
 .c-src{font-size:10px;color:#9ca3af;margin-top:14px;max-width:900px}
+@media print{.no-print,#snap-bar button,#refresh-btn,#end-date,#status{display:none!important}body{background:#fff}details{display:none}.c-card,.wf,.c-tbl{break-inside:avoid}@page{size:A4 landscape;margin:10mm}}
 </style>
 </head>
 <body>
@@ -91,7 +92,8 @@ body {
     <button id="refresh-btn" title="Обновить">&#8635;</button>
   </div>
 </div>
-<div id="snap-bar" style="text-align:right;font-size:11px;color:#6b7280;margin:-2px 0 8px;min-height:14px"></div>
+<div id="snap-bar" style="text-align:right;font-size:11px;color:#6b7280;margin:-2px 0 4px;min-height:14px"></div>
+<div class="no-print" style="text-align:right;margin:0 0 8px"><button id="pdf-btn" onclick="window.print()" title="Откроется окно печати — выберите «Сохранить как PDF»" style="font-size:11px;padding:2px 8px;border:1px solid #6b7280;color:#374151;background:#fff;border-radius:3px;cursor:pointer">Экспорт в PDF</button></div>
 
 <div id="content">
   <div style="padding:20px;text-align:center;color:#6b7280">&#8987; Загружаем данные...</div>
@@ -2692,21 +2694,23 @@ function budgetChgLines(endDate) {
   return out;
 }
 // Крупные события месяца отчёта (с 1-го числа по дату отчёта), реальные счета, без переводов между счетами:
-// • поступления и выплаты по отдельным транзакциям больше 5 млн ₽ (без суммирования по контрагенту);
-// • займы и кредиты — суммарно за месяц по займу (строки займов «Расходов из ЧП»; прочие — по проекту и статье),
-//   если сумма выплат или получений по займу больше 5 млн ₽.
+// • поступления — суммой за месяц по проекту (договору), если больше 5 млн ₽;
+// • выплаты — по отдельным транзакциям больше 5 млн ₽ (по подрядчикам не суммируются);
+// • займы и кредиты — суммой за месяц по займу, если выплаты или получения больше 5 млн ₽.
 var BIG_EVENT = 5e6;
+var LOAN_SHORT = { apt: 'АПТ (с процентами)', don: 'Донской В.М.', snab: 'Снабсервис', area: 'Новая площадь', ttss: 'ТТ ↔ ВСИП СС' };
+var LOAN_CRM_NAMES = { 1074: 'ТБанка' };   // контрагенты кредитов вне строк «Расходов из ЧП» (родительный падеж)
 function bigEvents(endDate) {
   var ms = endDate.slice(0, 7) + '-01';
   var LOAN = {'Получение кредита': 1, 'Выплата кредита': 1, 'Получение займа': 1, 'Выплата займа': 1};
-  var rowByCrm = {}, rowLabel = {};
-  CHP_LOAN_ROWS.forEach(function (r) { rowLabel[r.key] = r.label; Object.keys(r.crm).forEach(function (c) { rowByCrm[+c] = r.key; }); });
+  var rowByCrm = {};
+  CHP_LOAN_ROWS.forEach(function (r) { Object.keys(r.crm).forEach(function (c) { rowByCrm[+c] = r.key; }); });
   var pmRow = {};
   (_plansAll || []).forEach(function (it) {
     var r = CHP_PLAN_ROW[it.id] || chpRowOf(it.project_id, it.crm_company_id, it.category_id, rowByCrm);
     if (r && r !== 'other') pmRow[it.id] = r;
   });
-  var tx = [], loans = {};
+  var incByP = {}, pays = [], loans = {};
   _txns.forEach(function (t) {
     var dt = t.date || '';
     if (!dt || dt < ms || dt > endDate || !REAL_ACC[+t.org_account_id]) return;
@@ -2716,15 +2720,18 @@ function bigEvents(endDate) {
     var row = chpRowOf(t.project_id, t.crm_account_id, t.category_id, rowByCrm);
     if (row === 'other' && t.plan_money_id && pmRow[t.plan_money_id]) row = pmRow[t.plan_money_id];
     if ((row && row !== 'other') || LOAN[cn]) {
-      var k = (row && row !== 'other') ? rowLabel[row] : ((PROJ_NAME_MAP[+t.project_id] || ('проект ' + t.project_id)) + ' — ' + (/кредит/i.test(cn) ? 'кредит' : 'займ'));
-      var L = loans[k] || (loans[k] = { inc: 0, out: 0, n: 0 });
-      L.inc += inc; L.out += out; L.n++;
+      var isCredit = /кредит/i.test(cn);
+      var who = (row && row !== 'other') ? LOAN_SHORT[row] || row
+              : (LOAN_CRM_NAMES[+t.crm_account_id] || (PROJ_NAME_MAP[+t.project_id] || ('проект ' + t.project_id)));
+      var k = (isCredit && !(row && row !== 'other') ? 'кредита ' : 'займа ') + who;
+      var L = loans[k] || (loans[k] = { inc: 0, out: 0 });
+      L.inc += inc; L.out += out;
       return;
     }
-    if (inc > BIG_EVENT || out > BIG_EVENT)
-      tx.push({ dt: dt, pid: +t.project_id, cn: cn, v: inc - out, name: t.name || '' });
+    if (inc) incByP[+t.project_id] = (incByP[+t.project_id] || 0) + inc;
+    if (out > BIG_EVENT) pays.push({ pid: +t.project_id, cn: cn, v: out });
   });
-  return { tx: tx.sort(function (a, b) { return a.dt.localeCompare(b.dt); }), loans: loans };
+  return { inc: incByP, pays: pays, loans: loans };
 }
 function renderChanges(cur, prev, prevEnd, baseNote, chgLines, bigEv) {
   function f1(v) { var x = Math.round(v / 1e5) / 10; if (Math.abs(x) < 0.05) x = 0;
@@ -2758,15 +2765,16 @@ function renderChanges(cur, prev, prevEnd, baseNote, chgLines, bigEv) {
   if (chgLines) { gT = chgList(chgLines.tr); gK = chgList(chgLines.kb); }
   var gB = '';
   if (bigEv) {
-    var mln = function (v) { var x = Math.round(Math.abs(v) / 1e5) / 10; return x.toFixed(1).replace('.', ','); };
-    bigEv.tx.forEach(function (e) {
-      gB += '<li>' + e.dt.split('-').reverse().join('.') + ' — ' + (e.v > 0 ? 'поступление' : 'выплата') + ' <b style="color:' + (e.v > 0 ? '#15803d' : '#dc2626') + '">'
-        + (e.v > 0 ? '+' : '−') + mln(e.v) + ' млн</b>: ' + (PROJ_NAME_MAP[e.pid] || ('проект ' + e.pid)) + ', «' + e.cn + '»</li>';
-    });
+    var mln = function (v) { return (Math.round(Math.abs(v) / 1e5) / 10).toFixed(1).replace('.', ','); };
+    var pn = function (pid) { return PROJ_NAME_MAP[pid] || ('проект ' + pid); };
+    Object.keys(bigEv.inc).map(Number).filter(function (p) { return bigEv.inc[p] > BIG_EVENT; })
+      .sort(function (a, b) { return bigEv.inc[b] - bigEv.inc[a]; })
+      .forEach(function (p) { gB += '<li>Поступление ' + pn(p) + ': <b style="color:#15803d">+' + mln(bigEv.inc[p]) + ' млн</b></li>'; });
+    bigEv.pays.forEach(function (e) { gB += '<li>Выплата ' + pn(e.pid) + ', «' + e.cn + '»: <b style="color:#dc2626">−' + mln(e.v) + ' млн</b></li>'; });
     Object.keys(bigEv.loans).forEach(function (k) {
       var L = bigEv.loans[k];
-      if (L.out > BIG_EVENT) gB += '<li>Выплата займа <b style="color:#dc2626">−' + mln(L.out) + ' млн</b>: ' + k + ' <span style="color:#6b7280">(' + L.n + ' плат. за месяц)</span></li>';
-      if (L.inc > BIG_EVENT) gB += '<li>Получение займа <b style="color:#15803d">+' + mln(L.inc) + ' млн</b>: ' + k + '</li>';
+      if (L.out > BIG_EVENT) gB += '<li>Выплата ' + k + ': <b style="color:#dc2626">−' + mln(L.out) + ' млн</b></li>';
+      if (L.inc > BIG_EVENT) gB += '<li>Получение ' + k + ': <b style="color:#15803d">+' + mln(L.inc) + ' млн</b></li>';
     });
   }
   // ── Административные расходы: статьи + итог с основным источником изменения ──
@@ -2799,7 +2807,7 @@ function renderChanges(cur, prev, prevEnd, baseNote, chgLines, bigEv) {
   var h = '<div class="c-note">По сравнению с отчётом на ' + dStr + '. ' + (baseNote || '') + '</div>';
   if (!gB && !gT && !gK && !g2 && !g3) return h + '<div style="font-size:12px;color:#374151">Изменений нет.</div>';
   var ul = function (t, x) { return x ? '<div class="c-h2">' + t + '</div><ul style="margin:2px 0 6px 18px;padding:0;font-size:12px;line-height:1.6;color:#374151">' + x + '</ul>' : ''; };
-  return h + ul('Крупные события (поступления и выплаты свыше 5 млн ₽; займы — суммарно за месяц)', gB) + ul('По договорам — переносы', gT) + ul('По договорам — изменения бюджета', gK)
+  return h + ul('Крупные события (свыше 5 млн ₽ за месяц)', gB) + ul('По договорам — переносы', gT) + ul('По договорам — изменения бюджета', gK)
     + ul('Административные расходы (изменения свыше 1 млн ₽)', g2)
     + ul('Расходы из чистой прибыли (изменения свыше 1 млн ₽; поступления «+», выплаты «−»)', g3);
 }
