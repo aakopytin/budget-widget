@@ -73,6 +73,7 @@ body {
 .ad-b{height:8px;background:#f59e0b}
 .ad-v{font-size:11px;color:#6b7280;white-space:nowrap}
 .c-src{font-size:10px;color:#9ca3af;margin-top:14px;max-width:900px}
+html,body{-webkit-print-color-adjust:exact;print-color-adjust:exact}
 @media print{.no-print,#snap-bar button,#refresh-btn,#end-date,#status{display:none!important}body{background:#fff}details{display:none}.c-card,.wf,.c-tbl{break-inside:avoid}@page{size:A4 landscape;margin:10mm}}
 </style>
 </head>
@@ -93,7 +94,7 @@ body {
   </div>
 </div>
 <div id="snap-bar" style="text-align:right;font-size:11px;color:#6b7280;margin:-2px 0 4px;min-height:14px"></div>
-<div class="no-print" style="text-align:right;margin:0 0 8px"><button id="pdf-btn" onclick="window.print()" title="Откроется окно печати — выберите «Сохранить как PDF»" style="font-size:11px;padding:2px 8px;border:1px solid #6b7280;color:#374151;background:#fff;border-radius:3px;cursor:pointer">Экспорт в PDF</button></div>
+<div class="no-print" style="text-align:right;margin:0 0 8px"><button id="pdf-btn" onclick="exportPdf()" title="Откроется окно печати — выберите «Сохранить как PDF»" style="font-size:11px;padding:2px 8px;border:1px solid #6b7280;color:#374151;background:#fff;border-radius:3px;cursor:pointer">Экспорт в PDF</button></div>
 
 <div id="content">
   <div style="padding:20px;text-align:center;color:#6b7280">&#8987; Загружаем данные...</div>
@@ -2420,6 +2421,26 @@ function calcIpTtBalance(endDate) {
   return b;
 }
 
+// ── Экспорт в PDF: отчёт открывается в отдельном окне с заголовком «Отчет по бюджету за <месяц> <год>»
+//    (имя PDF-файла по умолчанию = заголовок окна), фоны и цветные полосы печатаются.
+var MONTHS_NOM = ['январь','февраль','март','апрель','май','июнь','июль','август','сентябрь','октябрь','ноябрь','декабрь'];
+function exportPdf() {
+  var d = getEndDate();
+  var title = 'Отчет по бюджету за ' + MONTHS_NOM[+d.slice(5, 7) - 1] + ' ' + d.slice(0, 4);
+  var css = Array.prototype.map.call(document.querySelectorAll('style'), function (s) { return s.textContent; }).join('\n');
+  var body = document.getElementById('content').innerHTML;
+  var w = window.open('', '_blank');
+  if (!w) { alert('Браузер заблокировал окно печати. Разрешите всплывающие окна для этого сайта.'); return; }
+  w.document.open();
+  w.document.write('<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>' + title + '</title><style>' + css
+    + '\nhtml,body{-webkit-print-color-adjust:exact;print-color-adjust:exact;background:#fff}details{display:none}'
+    + '.c-card,.wf,.c-tbl,.pb-wrap,.ad-wrap{break-inside:avoid}@page{size:A4 landscape;margin:10mm}</style></head><body>'
+    + body + '</body></html>');
+  w.document.close();
+  setTimeout(function () { w.focus(); w.print(); }, 400);
+}
+window.exportPdf = exportPdf;   // кнопка в шапке вызывает из глобальной области
+
 // ── ВИЗУАЛИЗАЦИЯ «ИСПОЛНЕНИЕ ДОГОВОРОВ» ─────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════════
 // ИСПОЛНЕНИЕ ДОГОВОРОВ — визуальный отчёт (по образцу PDF «Исполнение договоров»)
@@ -2626,9 +2647,7 @@ function renderContracts(C, endDate, opts) {
       + 'чем строка закончится для компании, когда план будет исполнен (по закрытому займу — уплаченные проценты).</div>' + ct;
   }
 
-  h += '<div class="c-src">Источник: Аспро Cloud, расчёт по алгоритму виджета Бюджет2 на ' + dStr + '. '
-    + '«Затраты из ЧП» — проект «Прочие/Закрытые» (id 35), см. таблицу «Расходы из чистой прибыли» (в водопаде со знаком расхода). '
-    + 'ЧП остаток = Чистая прибыль − Затраты из ЧП; «ИП + ТТ» — остатки ДС на счетах ТТ и ВСИП Прочие (ИП/СС), «ВСИП» — остальная часть.</div>';
+
   return h;
 }
 
