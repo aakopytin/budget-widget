@@ -2430,7 +2430,15 @@ function exportPdf() {
   var css = Array.prototype.map.call(document.querySelectorAll('style'), function (s) { return s.textContent; }).join('\n');
   var body = document.getElementById('content').innerHTML;
   var w = window.open('', '_blank');
-  if (!w) { alert('Браузер заблокировал окно печати. Разрешите всплывающие окна для этого сайта.'); return; }
+  if (!w) {
+    // Новое окно не открылось (Аспро запрещает всплывающие окна из виджета, значка блокировки при этом нет) —
+    // печать прямо из виджета: те же стили печати (цветные полосы, без кнопок); имя файла браузер возьмёт
+    // из заголовка страницы Аспро — при сохранении его можно поправить.
+    var t0 = document.title; document.title = title;
+    window.print();
+    document.title = t0;
+    return;
+  }
   w.document.open();
   w.document.write('<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>' + title + '</title><style>' + css
     + '\nhtml,body{-webkit-print-color-adjust:exact;print-color-adjust:exact;background:#fff}details{display:none}'
