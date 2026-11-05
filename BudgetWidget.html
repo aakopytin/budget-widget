@@ -1923,6 +1923,28 @@ function calcB1VatPlanB(endDate, vatAdj) {
 // expOst   = Σ(по pid где be_plan+be_eb > 0) (be_plan + be_eb − factCurE) + vfEbExpAdj
 // vatFact  / vatPlan  = из calcB1VatForecast()
 //
+// Резерв Бюджет1 на дату. На последний день месяца — по правилам колонки «конец прошлого месяца» Бюджет1:
+// расчёт ведётся как в следующем месяце (неоплаченные планы прошедшего месяца не учитываются), факт — по дату
+// отчёта, без внебюджетных позиций (счёт 150). Так резерв на 31.10 совпадает с колонкой «31.10» Бюджет1.
+function isMonthEnd(d) {
+  var y = +d.slice(0, 4), m = +d.slice(5, 7);
+  return +d.slice(8, 10) === new Date(y, m, 0).getDate();
+}
+function calcB1ForecastAt(endDate) {
+  if (!isMonthEnd(endDate)) return calcB1Forecast(endDate);
+  var y = +endDate.slice(0, 4), m = +endDate.slice(5, 7) + 1;
+  if (m > 12) { m = 1; y++; }
+  var nextStart = y + '-' + (m < 10 ? '0' + m : m) + '-01';
+  var sT = _txns, sP = _pls, sPl = _plans;
+  try {
+    _txns = sT.filter(function (t) { return (t.date || '') <= endDate; });
+    _pls  = (sP || []).filter(function (p) { return (p.date || '') <= endDate; });
+    _plans = sPl.filter(function (p) { return +p.org_account_id !== 150; });
+    var r = calcB1Forecast(nextStart);
+    r.dateStr = endDate.slice(8, 10) + '.' + endDate.slice(5, 7) + '.' + endDate.slice(0, 4);
+    return r;
+  } finally { _txns = sT; _pls = sP; _plans = sPl; }
+}
 function calcB1Forecast(endDate) {
   var LOAN_CN = {'Получение займа':1,'Выплата займа':1,'Получение кредита':1,'Выплата кредита':1};
   var OXR_B1  = {24:1, 26:1};  // офисные проекты (финансовая деятельность в Бюджет1)
@@ -2165,6 +2187,40 @@ function calcB1Forecast(endDate) {
 // ── КЭШ ДАННЫХ ───────────────────────────────────────────────────────────────
 
 var _cats = null, _plans = null, _txns = null, _pls = null, _bankAccounts = null;
+var _plansAll = null;   // все плановые платежи из Аспро; _plans — их срез «на дату отчёта» (plansAsOf)
+
+// ── Плановые платежи на дату отчёта ─────────────────────────────────────────
+// 1) Корректировки бюджета «Перенос± ММ.ГГГГ: …» / «КБ± ММ.ГГГГ: …» (сумма в Аспро всегда положительная):
+//    • знак — из названия: «−»/«-» уменьшает бюджет, «+» или без знака — увеличивает (как в Бюджет1);
+//    • учитываются только в отчётах на конец месяца решения ММ.ГГГГ и позже (месяц в названии — месяц решения,
+//      плановая дата — месяц расходования).
+// 2) Прочие плановые строки. Закрываемый месяц (дата отчёта не раньше конца прошлого месяца) — учитываются все
+//    строки, занесённые к моменту расчёта/фиксации: занесённое в первые дни нового месяца относится к закрываемому.
+//    Более ранние даты (месяцы, которые уже должны быть зафиксированы; если снимка нет — расчёт по текущим данным):
+//    строки, созданные после даты отчёта с плановой датой после даты отчёта, — новые решения, которых на дату
+//    отчёта не было, исключаются; созданные позже, но с плановой датой не позже даты отчёта (дозанесение
+//    за период) — учитываются.
+var BUDGET_CHG_RE = /^\s*(перенос|кб)\s*([+\-\u2212\u2013]?)\s*(\d{1,2})\.(\d{4})/i;
+function plansAsOf(endDate) {
+  var eYM = +endDate.slice(0, 4) * 100 + +endDate.slice(5, 7);
+  var now = new Date(), cl = new Date(now.getFullYear(), now.getMonth(), 0);   // конец прошлого месяца
+  var closingEnd = cl.getFullYear() + '-' + ('0' + (cl.getMonth() + 1)).slice(-2) + '-' + ('0' + cl.getDate()).slice(-2);
+  var byCreated = endDate < closingEnd;
+  var out = [];
+  (_plansAll || []).forEach(function (p) {
+    var m = BUDGET_CHG_RE.exec(p.name || '');
+    if (m) {
+      if (+m[4] * 100 + +m[3] > eYM) return;
+      if (m[2] && m[2] !== '+') p = Object.assign({}, p, { total: -Math.abs(parseFloat(p.total) || 0) });
+      out.push(p);
+      return;
+    }
+    var cd = (p.created_date || '').slice(0, 10), pd = p.plan_paid_date || '';
+    if (byCreated && cd && cd > endDate && pd > endDate) return;
+    out.push(p);
+  });
+  return out;
+}
 
 function getEndDate() {
   var el = document.getElementById('end-date');
@@ -2178,10 +2234,11 @@ function getEndDate() {
 function render() {
   if (!_cats || !_plans || !_txns || !_pls || _bankAccounts === null) return;
   var endDate = getEndDate();
+  _plans = plansAsOf(endDate);
   setStatus('&#9679; расчёт...');
   try {
     var agg  = aggregate(_plans, _txns, _pls, _cats, endDate);
-    var b1fc = calcB1Forecast(endDate);
+    var b1fc = calcB1ForecastAt(endDate);
     var html = buildTable(agg, _txns, _plans, _cats, endDate, _pls, b1fc);
     document.getElementById('content').innerHTML = html;
     var dt = endDate.split('-').reverse().join('.');
@@ -2207,6 +2264,7 @@ function loadData() {
       _cats = map;
     }),
     fetchAll('plan_money').then(function (items) {
+      _plansAll = items;
       _plans = items;
     })
   ])
@@ -2252,7 +2310,7 @@ function loadData() {
   }
 
   document.getElementById('refresh-btn').addEventListener('click', function () {
-    _cats = _plans = _txns = _pls = _bankAccounts = null;
+    _cats = _plans = _plansAll = _txns = _pls = _bankAccounts = null;
     loadData();
   });
 

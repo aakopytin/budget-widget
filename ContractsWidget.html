@@ -1983,6 +1983,28 @@ function calcB1VatPlanB(endDate, vatAdj) {
 // expOst   = Σ(по pid где be_plan+be_eb > 0) (be_plan + be_eb − factCurE) + vfEbExpAdj
 // vatFact  / vatPlan  = из calcB1VatForecast()
 //
+// Резерв Бюджет1 на дату. На последний день месяца — по правилам колонки «конец прошлого месяца» Бюджет1:
+// расчёт ведётся как в следующем месяце (неоплаченные планы прошедшего месяца не учитываются), факт — по дату
+// отчёта, без внебюджетных позиций (счёт 150). Так резерв на 31.10 совпадает с колонкой «31.10» Бюджет1.
+function isMonthEnd(d) {
+  var y = +d.slice(0, 4), m = +d.slice(5, 7);
+  return +d.slice(8, 10) === new Date(y, m, 0).getDate();
+}
+function calcB1ForecastAt(endDate) {
+  if (!isMonthEnd(endDate)) return calcB1Forecast(endDate);
+  var y = +endDate.slice(0, 4), m = +endDate.slice(5, 7) + 1;
+  if (m > 12) { m = 1; y++; }
+  var nextStart = y + '-' + (m < 10 ? '0' + m : m) + '-01';
+  var sT = _txns, sP = _pls, sPl = _plans;
+  try {
+    _txns = sT.filter(function (t) { return (t.date || '') <= endDate; });
+    _pls  = (sP || []).filter(function (p) { return (p.date || '') <= endDate; });
+    _plans = sPl.filter(function (p) { return +p.org_account_id !== 150; });
+    var r = calcB1Forecast(nextStart);
+    r.dateStr = endDate.slice(8, 10) + '.' + endDate.slice(5, 7) + '.' + endDate.slice(0, 4);
+    return r;
+  } finally { _txns = sT; _pls = sP; _plans = sPl; }
+}
 function calcB1Forecast(endDate) {
   var LOAN_CN = {'Получение займа':1,'Выплата займа':1,'Получение кредита':1,'Выплата кредита':1};
   var OXR_B1  = {24:1, 26:1};  // офисные проекты (финансовая деятельность в Бюджет1)
@@ -2246,8 +2268,11 @@ function chpRowOf(pid, crmId, catId, rowByCrm) {
 // Сейчас пусто: у всех плановых платежей займов в Аспро указан контрагент.
 var CHP_PLAN_ROW = {};
 
+// Бюджет = сумма всех плановых платежей строки (Бюджетный/Внебюджетный лимит, 36/150), включая уже оплаченные:
+//         поступление «+», выплата «−».
 // Факт  = поступления − выплаты по транзакциям проекта 35 (реальные счета, с 01.01.2024 по дату),
-//         без переводов между счетами и НДС-строк.
+//         без переводов между счетами и НДС-строк. Транзакция, привязанная к плановому платежу займа,
+//         относится к строке этого займа (даже если контрагент в транзакции указан иной, например банк).
 // План  = остаток плановых платежей (Бюджетный/Внебюджетный лимит, 36/150) с текущего месяца:
 //         сумма плана минус уже оплаченное по нему (транзакции с этим plan_money_id по дату).
 //         Поступление (type=30) «+», выплата (type=40) «−».
@@ -2258,11 +2283,18 @@ function calcChpTable(endDate) {
   var rowByCrm = {};
   CHP_LOAN_ROWS.forEach(function (r) { Object.keys(r.crm).forEach(function (c) { rowByCrm[+c] = r.key; }); });
   var R = {};
-  CHP_LOAN_ROWS.concat([{ key: 'other' }]).forEach(function (r) { R[r.key] = { fact: 0, plan: 0 }; });
+  CHP_LOAN_ROWS.concat([{ key: 'other' }]).forEach(function (r) { R[r.key] = { budget: 0, fact: 0, plan: 0 }; });
+  // плановый платёж → строка займа (по контрагенту планового платежа)
+  var pmRow = {};
+  (_plansAll || _plans).forEach(function (it) {
+    var r = CHP_PLAN_ROW[it.id] || chpRowOf(it.project_id, it.crm_company_id, it.category_id, rowByCrm);
+    if (r && r !== 'other') pmRow[it.id] = r;
+  });
   var paidByPm = {};
   _txns.forEach(function (tx) {
     var row = chpRowOf(tx.project_id, tx.crm_account_id, tx.category_id, rowByCrm);
     if (!row) return;
+    if (row === 'other' && tx.plan_money_id && pmRow[tx.plan_money_id]) row = pmRow[tx.plan_money_id];
     var dt = tx.date || '';
     if (!dt || dt < START_DATE || dt > endDate) return;
     if (!REAL_ACC[+tx.org_account_id] || SKIP[+tx.category_id]) return;
@@ -2275,19 +2307,21 @@ function calcChpTable(endDate) {
     if (!prow) return;
     if (+it.org_account_id !== 36 && +it.org_account_id !== 150) return;
     var dt = it.plan_paid_date || '';
-    if (!dt || dt < curMonthStart || SKIP[+it.category_id]) return;
+    if (!dt || dt < START_DATE || SKIP[+it.category_id]) return;
+    var key = CHP_PLAN_ROW[it.id] || prow;
+    var sgn = it.type === 30 ? 1 : it.type === 40 ? -1 : 0;
+    R[key].budget += sgn * (parseFloat(it.total) || 0);
+    if (dt < curMonthStart) return;
     var rest = (parseFloat(it.total) || 0) - (paidByPm[it.id] || 0);
     if (rest <= 0) return;
-    var v = it.type === 30 ? rest : it.type === 40 ? -rest : 0;
-    var key = CHP_PLAN_ROW[it.id] || prow;
-    R[key].plan += v;
+    R[key].plan += sgn * rest;
   });
-  var loans = { fact: 0, plan: 0 };
-  CHP_LOAN_ROWS.forEach(function (r) { loans.fact += R[r.key].fact; loans.plan += R[r.key].plan; });
+  var loans = { budget: 0, fact: 0, plan: 0 };
+  CHP_LOAN_ROWS.forEach(function (r) { loans.budget += R[r.key].budget; loans.fact += R[r.key].fact; loans.plan += R[r.key].plan; });
   return {
-    rows: CHP_LOAN_ROWS.map(function (r) { return { label: r.label, fact: R[r.key].fact, plan: R[r.key].plan }; }),
+    rows: CHP_LOAN_ROWS.map(function (r) { return { label: r.label, budget: R[r.key].budget, fact: R[r.key].fact, plan: R[r.key].plan }; }),
     loans: loans, other: R.other,
-    total: { fact: loans.fact + R.other.fact, plan: loans.plan + R.other.plan }
+    total: { budget: loans.budget + R.other.budget, fact: loans.fact + R.other.fact, plan: loans.plan + R.other.plan }
   };
 }
 // Для водопада: «Затраты из ЧП» со знаком «расход +» (= −итог расшифровки).
@@ -2501,9 +2535,9 @@ function renderContracts(C, endDate, opts) {
     var crow = function (l, r, cls) {
       var it = r.fact + r.plan;
       var c = function (v) { return '<td style="color:' + (v < 0 ? RD : (v > 0 ? GR : GY)) + '">' + (Math.abs(v) < 5e4 ? '0,0' : sg(v)) + '</td>'; };
-      return '<tr' + (cls ? ' class="' + cls + '"' : '') + '><td style="text-align:left">' + l + '</td>' + c(r.fact) + c(r.plan) + c(it) + '</tr>';
+      return '<tr' + (cls ? ' class="' + cls + '"' : '') + '><td style="text-align:left">' + l + '</td>' + c(r.budget || 0) + c(r.fact) + c(r.plan) + c(it) + '</tr>';
     };
-    var ct = '<table class="c-tbl"><thead><tr><th style="text-align:left">Статья</th><th>Факт</th><th>План</th><th>Итого</th></tr></thead><tbody>';
+    var ct = '<table class="c-tbl"><thead><tr><th style="text-align:left">Статья</th><th>Бюджет</th><th>Факт</th><th>Остаток плана</th><th>Итого</th></tr></thead><tbody>';
     CT.rows.forEach(function (r) { ct += crow(r.label, r); });
     ct += crow('ИТОГО займы', CT.loans, 'sub');
     ct += crow('Внепроектные расходы (нетто)', CT.other);
@@ -2511,7 +2545,7 @@ function renderContracts(C, endDate, opts) {
     ct += '</tbody></table>';
     h += '<div class="c-h2">Расходы из чистой прибыли</div>'
       + '<div class="c-note">Проект «Прочие/Закрытые». Поступления со знаком «+», выплаты «−». Факт — по ' + dStr
-      + '; План — остаток плановых платежей с текущего месяца (за вычетом уже оплаченного); Итого = Факт + План.</div>' + ct;
+      + '; Бюджет — все плановые платежи строки (включая оплаченные); Остаток плана — плановые платежи с текущего месяца за вычетом уже оплаченного; Итого = Факт + Остаток плана.</div>' + ct;
   }
 
   h += '<div class="c-src">Источник: Аспро Cloud, расчёт по алгоритму виджета Бюджет2 на ' + dStr + '. '
@@ -2550,8 +2584,9 @@ function contractsKeyParams(C) {
 }
 // Полный расчёт отчёта на дату (ядро Бюджет2 + расходы из ЧП + остатки ИП/ТТ) → объект C
 function calcContractsC(endDate) {
+  _plans = plansAsOf(endDate);   // плановые платежи на дату отчёта (переносы/КБ по месяцу решения, знак из названия)
   var agg = aggregate(_plans, _txns, _pls, _cats, endDate);
-  var b1fc = calcB1Forecast(endDate);
+  var b1fc = calcB1ForecastAt(endDate);
   buildTable(agg, _txns, _plans, _cats, endDate, _pls, b1fc);   // → window.__C
   var C = window.__C;
   var chp = calcChpCosts(endDate);
@@ -2621,22 +2656,99 @@ function renderChanges(cur, prev, prevEnd, baseNote) {
   return h + ul('По договорам', g1) + ul('Административные расходы', g2)
     + ul('Расходы из чистой прибыли (поступления «+», выплаты «−»)', g3);
 }
-// Отчёт на дату + изменения к концу прошлого месяца + раскрывающийся отчёт на конец прошлого месяца
+// Отчёт на дату + изменения к концу прошлого месяца + раскрывающийся отчёт на конец прошлого месяца.
+// Если отчёт на конец прошлого месяца зафиксирован (снимок в Vercel KV), сравнение и нижний блок берутся из снимка,
+// иначе — расчёт по текущим данным и кнопка «Зафиксировать».
+var SNAP_URL = '/api/snapshot?key=contracts:';
 function renderContractsWithPrev(endDate) {
   var prevEnd = _chgPrevMonthEnd(endDate);
   var prevC = calcContractsC(prevEnd);
+  var prevKP = contractsKeyParams(prevC), prevHtml = renderContracts(prevC, prevEnd);
   var curC = calcContractsC(endDate);
-  var chg = renderChanges(contractsKeyParams(curC), contractsKeyParams(prevC), prevEnd, '');
+  var curKP = contractsKeyParams(curC);
   var pStr = prevEnd.split('-').reverse().join('.');
-  return renderContracts(curC, endDate, { changesHtml: chg })
+  var chg = renderChanges(curKP, prevKP, prevEnd, 'Отчёт на ' + pStr + ' рассчитан по текущим данным Аспро (месяц не зафиксирован).');
+  setTimeout(function () { _snapApply(endDate, prevEnd, curKP, prevKP, prevHtml); }, 0);
+  return renderContracts(curC, endDate, { changesHtml: '<div id="snap-bar" style="font-size:11px;color:#6b7280;margin:2px 0 6px"></div><div id="chg-box">' + chg + '</div>' })
     + '<details style="margin-top:18px;border-top:2px solid #e5e7eb;padding-top:6px">'
     + '<summary style="cursor:pointer;font-size:13px;font-weight:700;color:#374151">Отчёт на ' + pStr + ' (конец прошлого месяца)</summary>'
-    + '<div style="margin-top:8px">' + renderContracts(prevC, prevEnd) + '</div></details>';
+    + '<div id="prev-box" style="margin-top:8px">' + prevHtml + '</div></details>';
+}
+function _snapApply(endDate, prevEnd, curKP, prevKP, prevHtml) {
+  var bar = document.getElementById('snap-bar');
+  if (!bar) return;
+  var pStr = prevEnd.split('-').reverse().join('.');
+  fetch(SNAP_URL + prevEnd).then(function (r) {
+    if (r.status === 404) return { none: true };
+    if (r.status === 503) return { off: true };
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  }).then(function (snap) {
+    if (snap.off) { bar.innerHTML = 'Фиксация отчётов недоступна: хранилище снимков не подключено.'; return; }
+    if (snap.none) {
+      bar.innerHTML = 'Отчёт на ' + pStr + ' не зафиксирован. '
+        + '<button id="snap-btn" style="font-size:11px;padding:2px 8px;border:1px solid #2563eb;color:#2563eb;background:#fff;border-radius:3px;cursor:pointer">Зафиксировать отчёт на ' + pStr + '</button>';
+      document.getElementById('snap-btn').onclick = function () {
+        if (!confirm('Зафиксировать отчёт на ' + pStr + ' по текущим данным Аспро?\nПосле фиксации цифры на эту дату не пересчитываются. Убедитесь, что все решения и платежи за месяц занесены.')) return;
+        var body = JSON.stringify({ endDate: prevEnd, savedAt: new Date().toISOString(), kp: prevKP, html: prevHtml });
+        fetch(SNAP_URL + prevEnd, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: body })
+          .then(function (r) {
+            if (r.status === 409) { alert('Отчёт на ' + pStr + ' уже зафиксирован.'); }
+            else if (!r.ok) { alert('Не удалось сохранить снимок: HTTP ' + r.status); return; }
+            _snapApply(endDate, prevEnd, curKP, prevKP, prevHtml);
+          }).catch(function (e) { alert('Не удалось сохранить снимок: ' + e.message); });
+      };
+      return;
+    }
+    var at = new Date(snap.savedAt);
+    var atStr = ('0' + at.getDate()).slice(-2) + '.' + ('0' + (at.getMonth() + 1)).slice(-2) + '.' + at.getFullYear()
+      + ' ' + ('0' + at.getHours()).slice(-2) + ':' + ('0' + at.getMinutes()).slice(-2);
+    bar.innerHTML = '&#128274; Отчёт на ' + pStr + ' зафиксирован ' + atStr + '; сравнение — с зафиксированными цифрами.';
+    var cb = document.getElementById('chg-box'), pb = document.getElementById('prev-box');
+    if (cb) cb.innerHTML = renderChanges(curKP, snap.kp, prevEnd, 'Сравнение с отчётом, зафиксированным ' + atStr + '.');
+    if (pb && snap.html) pb.innerHTML = snap.html;
+  }).catch(function (e) {
+    bar.innerHTML = 'Не удалось проверить фиксацию отчёта на ' + pStr + ': ' + e.message;
+  });
 }
 
 // ── КЭШ ДАННЫХ ───────────────────────────────────────────────────────────────
 
 var _cats = null, _plans = null, _txns = null, _pls = null, _bankAccounts = null;
+var _plansAll = null;   // все плановые платежи из Аспро; _plans — их срез «на дату отчёта» (plansAsOf)
+
+// ── Плановые платежи на дату отчёта ─────────────────────────────────────────
+// 1) Корректировки бюджета «Перенос± ММ.ГГГГ: …» / «КБ± ММ.ГГГГ: …» (сумма в Аспро всегда положительная):
+//    • знак — из названия: «−»/«-» уменьшает бюджет, «+» или без знака — увеличивает (как в Бюджет1);
+//    • учитываются только в отчётах на конец месяца решения ММ.ГГГГ и позже (месяц в названии — месяц решения,
+//      плановая дата — месяц расходования).
+// 2) Прочие плановые строки. Закрываемый месяц (дата отчёта не раньше конца прошлого месяца) — учитываются все
+//    строки, занесённые к моменту расчёта/фиксации: занесённое в первые дни нового месяца относится к закрываемому.
+//    Более ранние даты (месяцы, которые уже должны быть зафиксированы; если снимка нет — расчёт по текущим данным):
+//    строки, созданные после даты отчёта с плановой датой после даты отчёта, — новые решения, которых на дату
+//    отчёта не было, исключаются; созданные позже, но с плановой датой не позже даты отчёта (дозанесение
+//    за период) — учитываются.
+var BUDGET_CHG_RE = /^\s*(перенос|кб)\s*([+\-\u2212\u2013]?)\s*(\d{1,2})\.(\d{4})/i;
+function plansAsOf(endDate) {
+  var eYM = +endDate.slice(0, 4) * 100 + +endDate.slice(5, 7);
+  var now = new Date(), cl = new Date(now.getFullYear(), now.getMonth(), 0);   // конец прошлого месяца
+  var closingEnd = cl.getFullYear() + '-' + ('0' + (cl.getMonth() + 1)).slice(-2) + '-' + ('0' + cl.getDate()).slice(-2);
+  var byCreated = endDate < closingEnd;
+  var out = [];
+  (_plansAll || []).forEach(function (p) {
+    var m = BUDGET_CHG_RE.exec(p.name || '');
+    if (m) {
+      if (+m[4] * 100 + +m[3] > eYM) return;
+      if (m[2] && m[2] !== '+') p = Object.assign({}, p, { total: -Math.abs(parseFloat(p.total) || 0) });
+      out.push(p);
+      return;
+    }
+    var cd = (p.created_date || '').slice(0, 10), pd = p.plan_paid_date || '';
+    if (byCreated && cd && cd > endDate && pd > endDate) return;
+    out.push(p);
+  });
+  return out;
+}
 
 function getEndDate() {
   var el = document.getElementById('end-date');
@@ -2650,6 +2762,7 @@ function getEndDate() {
 function render() {
   if (!_cats || !_plans || !_txns || !_pls || _bankAccounts === null) return;
   var endDate = getEndDate();
+  _plans = plansAsOf(endDate);
   setStatus('&#9679; расчёт...');
   try {
     document.getElementById('content').innerHTML = renderContractsWithPrev(endDate);   // расчёт Бюджет2 на дату и на конец прошлого месяца
@@ -2676,6 +2789,7 @@ function loadData() {
       _cats = map;
     }),
     fetchAll('plan_money').then(function (items) {
+      _plansAll = items;
       _plans = items;
     })
   ])
@@ -2721,7 +2835,7 @@ function loadData() {
   }
 
   document.getElementById('refresh-btn').addEventListener('click', function () {
-    _cats = _plans = _txns = _pls = _bankAccounts = null;
+    _cats = _plans = _plansAll = _txns = _pls = _bankAccounts = null;
     loadData();
   });
 
