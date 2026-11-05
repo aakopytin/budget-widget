@@ -2604,13 +2604,12 @@ function renderContracts(C, endDate, opts) {
     var crow = function (l, r, cls) {
       var it = r.fact + r.plan;
       var c = function (v) { return '<td style="color:' + (v < 0 ? RD : (v > 0 ? GR : GY)) + '">' + (Math.abs(v) < 5e4 ? '0,0' : sg(v)) + '</td>'; };
-      return '<tr' + (cls ? ' class="' + cls + '"' : '') + '><td style="text-align:left">' + l + '</td>' + c(r.budget || 0) + c(r.fact) + c(r.plan) + c(it) + '</tr>';
+      return '<tr' + (cls ? ' class="' + cls + '"' : '') + '><td style="text-align:left">' + l + '</td>' + c(r.fact) + c(r.plan) + c(it) + '</tr>';
     };
     var ct = '<table class="c-tbl"><thead><tr><th style="text-align:left">Статья</th>'
-      + '<th title="Сумма всех плановых платежей строки (Бюджетный/Внебюджетный лимит), включая уже оплаченные">Бюджет (план. платежи)</th>'
       + '<th title="Деньги, фактически полученные (+) и выплаченные (−) по строке с 01.01.2024 по дату отчёта">Факт</th>'
       + '<th title="Неоплаченная часть плановых платежей с текущего месяца">Осталось по плану</th>'
-      + '<th title="Факт + Осталось по плану: итоговый денежный результат строки после исполнения плана">Итог (факт + осталось)</th></tr></thead><tbody>';
+      + '<th title="Бюджет = Факт + Осталось по плану: денежный результат строки после исполнения плана">Бюджет (факт + осталось)</th></tr></thead><tbody>';
     CT.rows.forEach(function (r) { ct += crow(r.label, r); });
     ct += crow('ИТОГО займы', CT.loans, 'sub');
     ct += crow('Внепроектные расходы (нетто)', CT.other);
@@ -2618,8 +2617,7 @@ function renderContracts(C, endDate, opts) {
     ct += '</tbody></table>';
     h += '<div class="c-h2">Расходы из чистой прибыли</div>'
       + '<div class="c-note">Проект «Прочие/Закрытые». Поступления со знаком «+», выплаты «−». Факт — по ' + dStr
-      + '. «Бюджет» — сумма плановых платежей строки, включая оплаченные (поступления без планового платежа в него не входят); '
-      + '«Осталось по плану» — неоплаченная часть плановых платежей с текущего месяца; «Итог» = Факт + Осталось по плану — '
+      + '. «Осталось по плану» — неоплаченная часть плановых платежей с текущего месяца; «Бюджет» = Факт + Осталось по плану — '
       + 'чем строка закончится для компании, когда план будет исполнен (по закрытому займу — уплаченные проценты).</div>' + ct;
   }
 
@@ -2704,14 +2702,18 @@ function renderChanges(cur, prev, prevEnd, baseNote, chgLines) {
   var g1 = '', g2 = '', g3 = '', gT = '', gK = '';
   // ── По договорам: переносы и изменения бюджета (строки «Перенос±» / «КБ±» с месяцем решения = месяц отчёта) ──
   function tys(v) { var x = Math.round(v / 1000); return (x > 0 ? '+' : x < 0 ? '−' : '') + Math.abs(x).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' тыс.'; }
+  // Итого по договору (проекту): сумма строк «Перенос±» / «КБ±» месяца решения
   function chgList(arr) {
     if (!arr || !arr.length) return '';
-    var tot = 0;
-    var li = arr.slice().sort(function (a, b) { return a.pid - b.pid || a.date.localeCompare(b.date); }).map(function (x) {
-      tot += x.v;
-      var d = x.date ? x.date.split('-').reverse().join('.') : '';
-      return '<li>' + (PROJ_NAME_MAP[x.pid] || ('проект ' + x.pid)) + ': <b style="color:' + (x.v > 0 ? '#dc2626' : '#15803d') + '">' + tys(x.v) + '</b>'
-        + ' <span style="color:#6b7280">— «' + x.name + '», плановая дата ' + d + '</span></li>';
+    var byP = {}, order = [], tot = 0;
+    arr.forEach(function (x) {
+      if (!(x.pid in byP)) { byP[x.pid] = 0; order.push(x.pid); }
+      byP[x.pid] += x.v; tot += x.v;
+    });
+    order.sort(function (a, b) { return byP[b] - byP[a]; });
+    var li = order.map(function (pid) {
+      var v = byP[pid];
+      return '<li>' + (PROJ_NAME_MAP[pid] || ('проект ' + pid)) + ': <b style="color:' + (v > 0 ? '#dc2626' : v < 0 ? '#15803d' : '#374151') + '">' + tys(v) + '</b></li>';
     }).join('');
     return li + '<li><b>Итого: ' + tys(tot) + '</b> <span style="color:#6b7280">(«+» — рост бюджета расходов)</span></li>';
   }
