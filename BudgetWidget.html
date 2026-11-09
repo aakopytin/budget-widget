@@ -1945,8 +1945,9 @@ function calcB1VatPlanB(endDate, vatAdj) {
   }
   var totInc = 0, totExp = 0;
   PROJECTS.forEach(function(p) {
-    if (p === OFF || p === EP) return;
-    totInc += Math.round(projOst2(p, 'inc') * 22/122);
+    if (p === OFF) return;
+    // Внепроектные: НДС по статьям, как в проектах (без НДС доходов — внепроектные доходы без НДС)
+    if (p !== EP) totInc += Math.round(projOst2(p, 'inc') * 22/122);
     SUBTYPES.forEach(function(s) {
       var o = projOstByType2(p, s);
       if (s === 'mat') totExp += Math.round(o * 22/122);
@@ -1960,7 +1961,7 @@ function calcB1VatPlanB(endDate, vatAdj) {
       }
     });
   });
-  [OFF, EP].forEach(function(g) {
+  [OFF].forEach(function(g) {
     var d = pm[g], a = acc[g];
     var b = a.e25 + (a.e26 - a.eCur) + d.be_plan, eb = d.be_eb;
     var ost = (b + eb === 0 || (!d.be_plan && !eb)) ? 0 : b + eb - (a.e25 + a.e26);
