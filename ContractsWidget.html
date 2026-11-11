@@ -2542,6 +2542,9 @@ function renderContracts(C, endDate, opts) {
     // шкала: «круглый» шаг (1/2/5 × 10^n) так, чтобы было 3–6 делений; границы — по шагу
     var raw = ((hi - lo) || 1) / 4, pw = Math.pow(10, Math.floor(Math.log(raw) / Math.LN10)), stp = pw;
     [1, 2, 5, 10].some(function (k) { stp = k * pw; return stp >= raw; });
+    // «копеечные» выходы за ноль (напр. ЧП остаток −930 ₽) не расширяют шкалу на целое деление
+    if (lo < 0 && -lo < stp * 0.02) lo = 0;
+    if (hi > 0 && hi < stp * 0.02) hi = 0;
     lo = Math.floor(lo / stp) * stp; hi = Math.ceil(hi / stp) * stp;
     var span = (hi - lo) || 1;
     function x(v) { return (v - lo) / span * 100; }
