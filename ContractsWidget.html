@@ -2343,7 +2343,9 @@ function chpRowOf(pid, crmId, catId, rowByCrm) {
   if (+pid === CHP_PID) {
     // Строка займа — по контрагенту, но только для финансовых статей: производственные расходы
     // (материалы, СМР, проектирование и т.п.) с тем же контрагентом — во «Внепроектные расходы».
-    if (isProdExpense((_cats && _cats[+catId]) || '')) return 'other';
+    // «Возвраты клиентам» (возврат аванса, напр. Снабсервису) — финансовая статья займа, не производственная.
+    var cn = (_cats && _cats[+catId]) || '';
+    if (cn !== 'Возвраты клиентам' && isProdExpense(cn)) return 'other';
     return rowByCrm[+crmId] || 'other';
   }
   if (CHP_TT_PIDS[+pid] && CHP_LOAN_CAT_NAMES[(_cats && _cats[+catId]) || '']) return 'ttss';
