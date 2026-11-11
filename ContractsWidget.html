@@ -51,6 +51,10 @@ body {
 .wf-zero{position:absolute;top:-3px;bottom:-3px;width:1px;background:#d1d5db}
 .wf-b,.pb{position:absolute;top:2px;height:10px;border-radius:2px}
 .wf-v{width:60px;text-align:right;font-size:11px;font-variant-numeric:tabular-nums}
+.wf-grid{position:absolute;top:-4px;bottom:-4px;width:1px;background:#eef0f3}
+.wf-lv{position:absolute;top:0;line-height:14px;font-size:11px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.wf-axis{height:14px}
+.wf-tick{position:absolute;top:0;transform:translateX(-50%);font-size:9px;color:#9ca3af;white-space:nowrap}
 .pb-wrap,.ad-wrap{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:8px 10px;max-width:900px}
 .pb-l{width:120px;text-align:right;font-size:11px;color:#374151;white-space:nowrap}
 .pb-v{width:110px;font-size:11px;color:#6b7280;font-variant-numeric:tabular-nums}
@@ -2484,8 +2488,8 @@ function renderContracts(C, endDate, opts) {
 
   var h = '';
   // ── Заголовок + резюме ───────────────────────────────────────────────────
-  h += '<div class="c-title">Исполнение договоров на ' + dStr + '</div>';
-  h += '<div class="c-sub">Накопительно с 01.01.2024 · административные расходы до конца 1 кв. 2027 · суммы в млн ₽</div>';
+  h += '<div class="c-title">Исполнение договоров на ' + dStr
+    + ' <span class="c-sub" style="margin-left:6px;font-weight:400">Накопительно с 01.01.2024 · административные расходы до конца 1 кв. 2027 · суммы в млн ₽</span></div>';
   h += '<div class="c-lead">Чистая прибыль по факту <b>' + f1(npF) + '</b> млн при плане <b>' + f1(npP) + '</b> млн. '
     + 'По договорам ещё ожидается <b>' + f1(revP - revF) + '</b> млн выручки и <b>' + f1(costP - costF) + '</b> млн затрат; '
     + 'если план выполнится, к концу периода останется <b>' + f1(npP - npF) + '</b> млн чистой прибыли сверх текущей.</div>';
@@ -2535,8 +2539,14 @@ function renderContracts(C, endDate, opts) {
       if (s.tot) { run = s.v; lo = Math.min(lo, run); hi = Math.max(hi, run); }
       else { var a = run, b = run + s.v; lo = Math.min(lo, a, b); hi = Math.max(hi, a, b); run = b; }
     });
+    // шкала: «круглый» шаг (1/2/5 × 10^n) так, чтобы было 3–6 делений; границы — по шагу
+    var raw = ((hi - lo) || 1) / 4, pw = Math.pow(10, Math.floor(Math.log(raw) / Math.LN10)), stp = pw;
+    [1, 2, 5, 10].some(function (k) { stp = k * pw; return stp >= raw; });
+    lo = Math.floor(lo / stp) * stp; hi = Math.ceil(hi / stp) * stp;
     var span = (hi - lo) || 1;
     function x(v) { return (v - lo) / span * 100; }
+    var ticks = []; for (var tv = lo; tv <= hi + stp / 2; tv += stp) ticks.push(tv);
+    var grid = ticks.map(function (tv) { return '<div class="wf-grid" style="left:' + x(tv) + '%"></div>'; }).join('');
     run = 0;
     var rows = st.map(function(s) {
       var a, b, clr;
@@ -2545,16 +2555,25 @@ function renderContracts(C, endDate, opts) {
       var left = x(a), w = Math.max(x(b) - x(a), 0.4);
       var val = s.tot ? f1(s.v) : sg(s.v);
       var vc = s.tot ? (s.v < 0 ? RD : TX) : (s.v >= 0 ? GR : RD);
+      // подпись — сразу у бара: справа от конца бара, а у правого края шкалы — слева от начала
+      var lbl = (left + w > 78)
+        ? 'right:' + (100 - left) + '%;margin-right:4px'
+        : 'left:' + (left + w) + '%;margin-left:4px';
       return '<div class="wf-row">'
         + '<div class="wf-l' + (s.tot ? ' wf-tot' : '') + '">' + s.l + '</div>'
-        + '<div class="wf-bar"><div class="wf-zero" style="left:' + x(0) + '%"></div>'
-        + '<div class="wf-b" style="left:' + left + '%;width:' + w + '%;background:' + clr + '"></div></div>'
-        + '<div class="wf-v' + (s.tot ? ' wf-tot' : '') + '" style="color:' + vc + '">' + val + '</div></div>';
+        + '<div class="wf-bar">' + grid + '<div class="wf-zero" style="left:' + x(0) + '%"></div>'
+        + '<div class="wf-b" style="left:' + left + '%;width:' + w + '%;background:' + clr + '"></div>'
+        + '<div class="wf-lv' + (s.tot ? ' wf-tot' : '') + '" style="' + lbl + ';color:' + vc + '">' + val + '</div></div></div>';
     }).join('');
-    return '<div class="wf"><div class="wf-h">' + title + '</div>' + rows + '</div>';
+    var axis = '<div class="wf-row wf-axis"><div class="wf-l"></div><div class="wf-bar">'
+      + ticks.map(function (tv) { return '<div class="wf-tick" style="left:' + x(tv) + '%">' + f1(tv) + '</div>'; }).join('')
+      + '</div></div>';
+    return '<div class="wf"><div class="wf-h">' + title + '</div>' + rows + axis + '</div>';
   }
   // ── Основные изменения за месяц (заполняется асинхронно: fillChanges) ──
-  if (opts.changesHtml) h += '<div class="c-sec">Основные изменения за месяц</div>' + opts.changesHtml;
+  if (opts.changesHtml) h += '<div class="c-sec">Основные изменения за месяц (свыше 5 млн ₽ за месяц)'
+    + (opts.prevStr ? ' <span class="c-note" style="margin-left:6px;font-weight:400">По сравнению с отчётом на ' + opts.prevStr + '.</span>' : '')
+    + '</div>' + opts.changesHtml;
   h += '<div class="c-sec">От наценки к остатку чистой прибыли</div>'
     + '<div class="c-note">Каждая строка — шаг: зелёный добавляет, красный вычитает, синие — промежуточные итоги. Слева план, справа факт на ' + dStr + '.</div>'
     + '<div class="wf-wrap">' + waterfall('ПЛАН', steps('p')) + waterfall('ФАКТ', steps('f')) + '</div>';
@@ -2585,7 +2604,6 @@ function renderContracts(C, endDate, opts) {
   }).join('');
   h += '<div class="c-sec">Проекты</div>'
     + '<div class="c-h2">Наценка по проектам: факт против плана</div>'
-    + '<div class="c-note">Серая полоса — план, цветная — факт. Где цветная короче, наценка ещё не получена; где длиннее — получено больше плана. Подписи: факт / план.</div>'
     + '<div class="pb-legend"><span class="lg pb-plan"></span>План <span class="lg pb-fact"></span>Факт <span class="lg pb-neg"></span>Факт ниже нуля</div>'
     + '<div class="pb-wrap">' + bars + '</div>';
 
@@ -2612,7 +2630,7 @@ function renderContracts(C, endDate, opts) {
     + '<td>' + f1(T.rO) + '</td><td>' + f1(T.cF) + '</td><td>' + f1(T.cO) + '</td><td>' + f1(T.mP) + '</td><td>' + f1(T.mF) + '</td>'
     + '<td>' + pct1(T.mF, T.rF) + '</td><td></td></tr></tbody></table>';
   h += '<div class="c-h2">Выручка, себестоимость и наценка по проектам</div>'
-    + '<div class="c-note">Закрытые проекты приглушены. «Переплата» — получено больше суммы договора, «Убыток» — фактическая наценка ниже нуля.</div>' + t;
+    + '<div class="c-note">«Переплата» — получено больше суммы договора, «Убыток» — фактическая наценка ниже нуля.</div>' + t;
 
   // ── Административные расходы ─────────────────────────────────────────────
   var AD = [
@@ -2628,8 +2646,7 @@ function renderContracts(C, endDate, opts) {
       + '<div class="ad-bar"><div class="ad-b" style="width:' + w + '%"></div></div>'
       + '<div class="ad-v">' + f1(a.f) + ' из ' + f1(a.p) + ' · осталось ' + f1(a.p - a.f) + '</div></div>';
   }).join('');
-  h += '<div class="c-sec">Расходы</div>'
-    + '<div class="c-h2">Административные расходы</div>'
+  h += '<div class="c-h2">Административные расходы</div>'
     + '<div class="c-note">С 01.01.2024 до конца 1 кв. 2027. Полоса — доля бюджета, уже потраченная. Израсходовано ' + pct(aF, aP) + ' из ' + f1(aP) + ' млн.</div>'
     + '<div class="ad-wrap">' + ad + '</div>';
 
@@ -2643,17 +2660,14 @@ function renderContracts(C, endDate, opts) {
     };
     var ct = '<table class="c-tbl"><thead><tr><th style="text-align:left">Статья</th>'
       + '<th title="Деньги, фактически полученные (+) и выплаченные (−) по строке с 01.01.2024 по дату отчёта">Факт</th>'
-      + '<th title="Неоплаченная часть плановых платежей с текущего месяца">Осталось по плану</th>'
-      + '<th title="Бюджет = Факт + Осталось по плану: денежный результат строки после исполнения плана">Бюджет (факт + осталось)</th></tr></thead><tbody>';
+      + '<th title="Неоплаченная часть плановых платежей с текущего месяца">Бюджет</th>'
+      + '<th title="Итого = Факт + Бюджет: денежный результат строки после исполнения плана">Итого расходы</th></tr></thead><tbody>';
     CT.rows.forEach(function (r) { ct += crow(r.label, r); });
     ct += crow('ИТОГО займы', CT.loans, 'sub');
     ct += crow('Внепроектные расходы (нетто)', CT.other);
     ct += crow('ИТОГО РАСХОДЫ ИЗ ЧИСТОЙ ПРИБЫЛИ', CT.total, 'tot');
     ct += '</tbody></table>';
-    h += '<div class="c-h2">Расходы из чистой прибыли</div>'
-      + '<div class="c-note">Проект «Прочие/Закрытые». Поступления со знаком «+», выплаты «−». Факт — по ' + dStr
-      + '. «Осталось по плану» — неоплаченная часть плановых платежей с текущего месяца; «Бюджет» = Факт + Осталось по плану — '
-      + 'чем строка закончится для компании, когда план будет исполнен (по закрытому займу — уплаченные проценты).</div>' + ct;
+    h += '<div class="c-h2">Расходы из чистой прибыли</div>' + ct;
   }
 
 
@@ -2795,15 +2809,19 @@ function renderChanges(cur, prev, prevEnd, baseNote, chgLines, bigEv) {
   if (bigEv) {
     var mln = function (v) { return (Math.round(Math.abs(v) / 1e5) / 10).toFixed(1).replace('.', ','); };
     var pn = function (pid) { return PROJ_NAME_MAP[pid] || ('проект ' + pid); };
-    Object.keys(bigEv.inc).map(Number).filter(function (p) { return bigEv.inc[p] > BIG_EVENT; })
+    var incL = Object.keys(bigEv.inc).map(Number).filter(function (p) { return bigEv.inc[p] > BIG_EVENT; })
       .sort(function (a, b) { return bigEv.inc[b] - bigEv.inc[a]; })
-      .forEach(function (p) { gB += '<li>Поступление ' + pn(p) + ': <b style="color:#15803d">+' + mln(bigEv.inc[p]) + ' млн</b></li>'; });
+      .map(function (p) { return pn(p) + ': <b style="color:#15803d">+' + mln(bigEv.inc[p]) + ' млн</b>'; });
+    if (incL.length) gB += '<li>Поступления: ' + incL.join(', ') + '</li>';
     bigEv.pays.forEach(function (e) { gB += '<li>Выплата ' + pn(e.pid) + ', «' + e.cn + '»: <b style="color:#dc2626">−' + mln(e.v) + ' млн</b></li>'; });
+    var lOut = [], lIn = [];
     Object.keys(bigEv.loans).forEach(function (k) {
       var L = bigEv.loans[k];
-      if (L.out > BIG_EVENT) gB += '<li>Выплата ' + k + ': <b style="color:#dc2626">−' + mln(L.out) + ' млн</b></li>';
-      if (L.inc > BIG_EVENT) gB += '<li>Получение ' + k + ': <b style="color:#15803d">+' + mln(L.inc) + ' млн</b></li>';
+      if (L.out > BIG_EVENT) lOut.push(k + ': <b style="color:#dc2626">−' + mln(L.out) + ' млн</b>');
+      if (L.inc > BIG_EVENT) lIn.push(k + ': <b style="color:#15803d">+' + mln(L.inc) + ' млн</b>');
     });
+    if (lOut.length) gB += '<li>Выплаты кредитов / займов: ' + lOut.join(', ') + '</li>';
+    if (lIn.length) gB += '<li>Получение кредитов / займов: ' + lIn.join(', ') + '</li>';
   }
   // ── Административные расходы: статьи + итог с основным источником изменения ──
   var AT = 'Итого административные расходы';
@@ -2832,10 +2850,12 @@ function renderChanges(cur, prev, prevEnd, baseNote, chgLines, bigEv) {
     if (big(a, b)) g3 += '<li>' + k + ' — ' + part('итого', a, b) + '</li>';
   });
   var dStr = prevEnd.split('-').reverse().join('.');
-  var h = '<div class="c-note">По сравнению с отчётом на ' + dStr + '. ' + (baseNote || '') + '</div>';
+  var h = baseNote ? '<div class="c-note">' + baseNote + '</div>' : '';
+  gT = gK = '';   // «По договорам» (переносы, изменения бюджета) в отчёт не выводятся
   if (!gB && !gT && !gK && !g2 && !g3) return h + '<div style="font-size:12px;color:#374151">Изменений нет.</div>';
   var ul = function (t, x) { return x ? '<div class="c-h2">' + t + '</div><ul style="margin:2px 0 6px 18px;padding:0;font-size:12px;line-height:1.6;color:#374151">' + x + '</ul>' : ''; };
-  return h + ul('Крупные события (свыше 5 млн ₽ за месяц)', gB) + ul('По договорам — переносы', gT) + ul('По договорам — изменения бюджета', gK)
+  var ul0 = function (x) { return x ? '<ul style="margin:2px 0 6px 18px;padding:0;font-size:12px;line-height:1.6;color:#374151">' + x + '</ul>' : ''; };
+  return h + ul0(gB)
     + ul('Административные расходы (изменения свыше 1 млн ₽)', g2)
     + ul('Расходы из чистой прибыли (изменения свыше 1 млн ₽; поступления «+», выплаты «−»)', g3);
 }
@@ -2856,7 +2876,7 @@ function renderContractsWithPrev(endDate) {
   window.__bigEv = bigEv;
   var chg = renderChanges(curKP, prevKP, prevEnd, '', chgLines, bigEv);
   setTimeout(function () { _snapApply(endDate, prevEnd, curKP, prevKP, prevHtml); }, 0);
-  return renderContracts(curC, endDate, { changesHtml: '<div id="chg-box">' + chg + '</div>' })
+  return renderContracts(curC, endDate, { changesHtml: '<div id="chg-box">' + chg + '</div>', prevStr: pStr })
     + '<details style="margin-top:18px;border-top:2px solid #e5e7eb;padding-top:6px">'
     + '<summary style="cursor:pointer;font-size:13px;font-weight:700;color:#374151">Отчёт на ' + pStr + ' (конец прошлого месяца)</summary>'
     + '<div id="prev-box" style="margin-top:8px">' + prevHtml + '</div></details>';
