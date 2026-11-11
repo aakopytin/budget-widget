@@ -2556,9 +2556,11 @@ function renderContracts(C, endDate, opts) {
       var val = s.tot ? f1(s.v) : sg(s.v);
       var vc = s.tot ? (s.v < 0 ? RD : TX) : (s.v >= 0 ? GR : RD);
       // подпись — сразу у бара: справа от конца бара, а у правого края шкалы — слева от начала
-      var lbl = (left + w > 78)
-        ? 'right:' + (100 - left) + '%;margin-right:4px'
-        : 'left:' + (left + w) + '%;margin-left:4px';
+      var inside = false, lbl;
+      if (left + w <= 80) lbl = 'left:' + (left + w) + '%;margin-left:4px';                 // справа от бара
+      else if (w >= 14) { inside = true; lbl = 'right:' + (100 - left - w) + '%;margin-right:4px'; }  // внутри длинного бара, у его конца
+      else lbl = 'right:' + (100 - left) + '%;margin-right:4px';                             // слева от короткого бара
+      if (inside) vc = '#fff';
       return '<div class="wf-row">'
         + '<div class="wf-l' + (s.tot ? ' wf-tot' : '') + '">' + s.l + '</div>'
         + '<div class="wf-bar">' + grid + '<div class="wf-zero" style="left:' + x(0) + '%"></div>'
@@ -2566,7 +2568,10 @@ function renderContracts(C, endDate, opts) {
         + '<div class="wf-lv' + (s.tot ? ' wf-tot' : '') + '" style="' + lbl + ';color:' + vc + '">' + val + '</div></div></div>';
     }).join('');
     var axis = '<div class="wf-row wf-axis"><div class="wf-l"></div><div class="wf-bar">'
-      + ticks.map(function (tv) { return '<div class="wf-tick" style="left:' + x(tv) + '%">' + f1(tv) + '</div>'; }).join('')
+      + ticks.map(function (tv, i) {
+          var tf = i === 0 ? 'translateX(0)' : (i === ticks.length - 1 ? 'translateX(-100%)' : 'translateX(-50%)');
+          return '<div class="wf-tick" style="left:' + x(tv) + '%;transform:' + tf + '">' + Math.round(tv / M).toString().replace('-', '−') + '</div>';
+        }).join('')
       + '</div></div>';
     return '<div class="wf"><div class="wf-h">' + title + '</div>' + rows + axis + '</div>';
   }
