@@ -2340,7 +2340,12 @@ var CHP_LOAN_ROWS = [
 var CHP_TT_PIDS = {26: 1, 28: 1};
 var CHP_LOAN_CAT_NAMES = {'Получение кредита': 1, 'Выплата кредита': 1, 'Получение займа': 1, 'Выплата займа': 1};
 function chpRowOf(pid, crmId, catId, rowByCrm) {
-  if (+pid === CHP_PID) return rowByCrm[+crmId] || 'other';
+  if (+pid === CHP_PID) {
+    // Строка займа — по контрагенту, но только для финансовых статей: производственные расходы
+    // (материалы, СМР, проектирование и т.п.) с тем же контрагентом — во «Внепроектные расходы».
+    if (isProdExpense((_cats && _cats[+catId]) || '')) return 'other';
+    return rowByCrm[+crmId] || 'other';
+  }
   if (CHP_TT_PIDS[+pid] && CHP_LOAN_CAT_NAMES[(_cats && _cats[+catId]) || '']) return 'ttss';
   return null;
 }
