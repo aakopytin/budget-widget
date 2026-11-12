@@ -1561,8 +1561,18 @@ function calcB1VatForecast(endDate) {
 
   // ── Шаг 5d: уточнение vatOutPlan для оплаченных ВБ-позиций ─────────────────
   var ebPmVatMap = {};
+  // PLS без plan_money_id (транзакцию привязали к плану после проведения) — привязка через
+  // транзакцию того же документа: org_id + reference_id + type + is_storno (как в Бюджет1).
+  var _refKey = function(r) { return r.org_id + '|' + r.reference_id + '|' + r.type + '|' + (+r.is_storno ? 1 : 0); };
+  var _refPm = {};
+  _txns.forEach(function(tx) {
+    if (!tx.reference_id || !tx.plan_money_id || !ebPlanIds[tx.plan_money_id]) return;
+    var k = _refKey(tx);
+    _refPm[k] = (_refPm[k] === undefined || _refPm[k] === tx.plan_money_id) ? tx.plan_money_id : -1;
+  });
   _pls.forEach(function(p) {
     var pmId = p.plan_money_id;
+    if (!pmId && p.reference_id) { var _rp = _refPm[_refKey(p)]; if (_rp > 0) pmId = _rp; }
     if (!pmId || !ebPlanIds[pmId]) return;
     if ((p.date||'') > endDate) return;
     if (+p.category_id === 3144) ebPmVatMap[pmId] = (ebPmVatMap[pmId]||0) + (parseFloat(p.outcome)||0);
