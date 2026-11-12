@@ -2032,7 +2032,7 @@ function calcB1VatPlanB(endDate, vatAdj) {
       else if (s === 'smr') totExp += Math.round((rem5(p) + ebRem5(p)) * 5/105);   // СМР с НДС: без минусов
       else if (s === 'other') {
         // Прочие проектные расходы: плановая ставка 0%, кроме возвратов покупателям (как в Бюджет1)
-        var planOth = pm[p].bePlanByType.other || 0;
+        var planOth = (pm[p].bePlanByType.other || 0) + (pm[p].beEbByType.other || 0);   // как в Бюджет1: НДС плана включает внебюджет
         var vatPlanOth = (prog[p] || {}).other || 0;
         var rOth = (planOth > 0 && vatPlanOth > 0) ? Math.min(vatPlanOth/planOth, 22/122) : defOth;
         totExp += Math.round(projRetOst2(p) * rOth);
